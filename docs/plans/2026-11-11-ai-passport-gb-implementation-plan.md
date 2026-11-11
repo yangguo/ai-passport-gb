@@ -16,8 +16,16 @@
 - 不下载、不提交、不链接商业 ROM 或任天堂 boot ROM。
 - 不修改 `third_party/peanut-gb/peanut_gb.h`。
 - 主机与设备使用同一组宏：`ENABLE_SOUND=0`、`ENABLE_LCD=1`、`PEANUT_GB_12_COLOUR=1`、`PEANUT_GB_HIGH_LCD_ACCURACY=1`、`PEANUT_GB_USE_INTRINSICS=1`。
-- `partitions.csv` 与上游 `33d3d1d` 保持一致，直到设计第 14 节问题 2 被否决。
-- 不初始化 LVGL、Wi-Fi、BLE、I2S。
+- 设计第 14 节 8 项已于 2026-11-11 由 Vincent 决定，本计划按那些决定执行。
+- P0–P3 的 `partitions.csv` 与上游 `33d3d1d` 保持一致。只内嵌自制 ROM，不改这张表。
+- 画面实现 `GB_SCALE_1X_CENTER`。`GB_SCALE_3_2` 在测完时钟和 `present_us` 之前返回 `ESP_ERR_NOT_SUPPORTED`。
+- 输入是现有三键。任意时刻最多一个 GB 键。
+- 跳帧和隔行默认关。P3 的表填上之前，它们不是验收线。
+- `gb_save_store` 在 `size > 2048` 时返回 `GB_ERR_SAVE`，不写 NVS，也不为此新增分区。
+- 不提交 dmg-acid2、mooneye-test-suite、mealybug-tearoom-tests、age-test-roms 或其他第三方 ROM。Blargg 在许可证确认前同样不提交。
+- 根 `LICENSE` 是 MIT，Copyright (c) 2026 yangguo。它不覆盖第三方声明。
+- 复制 Peanut-GB 时保留 `peanut_gb.h` 文件头里的版权与许可声明：Copyright (c) 2018-2023 Mahyar Koshkouei，以及其中 SameBoy、Copyright (c) 2015-2019 Lior Halphon 的段落。`third_party/peanut-gb/LICENSE` 照抄该 MIT 正文。
+- 不初始化 LVGL、Wi-Fi、BLE、I2S。首期不复制 minigb_apu。
 - 性能数字写入 `docs/benchmarks/` 时必须带单位和构建配置。没有测到的格子写 `待测`，不填估计值。
 - 真机步骤标为“用户真机”。云端代理不刷写、不把缺照片当成实现失败。
 - 按下掩码 1 表示按下，位与 Peanut 的 `JOYPAD_*` 相同。适配层写入 `direct.joypad = (uint8_t)~pressed_mask`。
@@ -75,7 +83,7 @@ mkdir -p third_party/peanut-gb
 cp /tmp/peanut-gb/peanut_gb.h third_party/peanut-gb/peanut_gb.h
 ```
 
-该提交的许可证在 `peanut_gb.h` 文件头，不在单独的 `LICENSE`。把文件头从 `/**` 到结束的 `*/` 中的 MIT 正文写入 `third_party/peanut-gb/LICENSE`，不要改写句子。
+该提交的许可证在 `peanut_gb.h` 文件头，不在单独的 `LICENSE`。把文件头从 `/**` 到结束的 `*/` 中的 MIT 正文写入 `third_party/peanut-gb/LICENSE`，不要改写句子。文件头里的 Mahyar Koshkouei 与 Lior Halphon 声明留在 `peanut_gb.h` 里。根目录 `LICENSE`（Copyright (c) 2026 yangguo）不代替这段文字。
 
 - [ ] **Step 2: 写 SOURCE.md**
 
@@ -141,7 +149,7 @@ Expected: 退出码 0。`rgbfix -v` 不报校验和错误。若系统没有 `rgb
 
 - [ ] **Step 3: 写 roms/README.md**
 
-写明：本目录只有自制 ROM；商业 ROM 禁止入库；可选的 MIT 测试 ROM（dmg-acid2、mealybug、mooneye-test-suite、age-test-roms）默认不入库，许可证与提交号见设计第 15.2 节；Blargg 待确认，不用。
+写明：本目录只有自制 ROM，归根 `LICENSE`（MIT，Copyright (c) 2026 yangguo）。商业 ROM 禁止入库。dmg-acid2、mealybug、mooneye-test-suite、age-test-roms 不入库，许可证与提交号见设计第 15.2 节。Blargg 待确认，不用。
 
 - [ ] **Step 4: Commit**
 
@@ -321,7 +329,7 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 - [ ] **Step 2: partitions.csv**
 
-复制上游 `33d3d1d` 的三行：nvs `0x9000/0x6000`，phy `0xf000/0x1000`，factory `0x10000/0x7F0000`。文件头注释写明来源提交，以及“在设计第 14 节问题 2 答复前不改”。
+复制上游 `33d3d1d` 的三行：nvs `0x9000/0x6000`，phy `0xf000/0x1000`，factory `0x10000/0x7F0000`。文件头注释写明来源提交，以及“P0–P3 不改这张表（2026-11-11，Vincent）”。
 
 - [ ] **Step 3: 构建**
 
@@ -719,7 +727,7 @@ git commit -m "feat: store 2 KiB cart RAM in NVS"
 
 - [ ] **Step 1: 写这个桩**
 
-不要复制 `minigb_apu`。设计第 14 节问题 6 若被否决，另开计划再引入 `third_party/minigb_apu` 及其 `LICENSE`。
+不要复制 `minigb_apu`。首期不初始化 I2S 已决定。P5 若以后要做，另开计划，并带上 `examples/sdl2/minigb_apu/LICENSE`。
 
 - [ ] **Step 2: 确认声音宏仍是 0**
 
@@ -759,7 +767,7 @@ git commit -m "feat: leave GB audio disabled"
 | cart RAM 到 NVS，超限失败 | Task 12 |
 | 音频预留且默认关 | Task 13 |
 | 真机步骤单独标出 | Task 8、9、10、11、12 |
-| 许可证文件随第三方代码落地 | Task 1、6；minigb_apu 不在本计划落地 |
+| 许可证 | 根 `LICENSE` 已是 MIT，Copyright (c) 2026 yangguo。Task 1、6 再落第三方声明，并保留 Peanut-GB 文件头。minigb_apu 不在本计划落地 |
 | 每个性能数字有来源或标待测 | Task 11 的表；设计第 5 节的计算不写进基准表冒充测量 |
 
 P5 音频不在本计划的完成定义里。Task 13 只保证它没有被打开。
