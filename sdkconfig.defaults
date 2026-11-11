@@ -1,0 +1,16 @@
+# ESP-IDF 5.5.3, target esp32c3. Do not enable PSRAM, Bluetooth, or Wi-Fi.
+# CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ is left at the IDF default. The value that
+# landed in sdkconfig is recorded in docs/benchmarks/ as a build setting,
+# not as a runtime measurement.
+
+CONFIG_IDF_TARGET="esp32c3"
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# Keep the image header at 8 MB so merge-bin does not depend on a live chip.
+CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=n
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+CONFIG_BT_ENABLED=n
+CONFIG_ESP_WIFI_ENABLED=n
