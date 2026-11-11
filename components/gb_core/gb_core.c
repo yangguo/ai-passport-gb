@@ -15,6 +15,12 @@
 #define PEANUT_GB_HIGH_LCD_ACCURACY 1
 #define PEANUT_GB_USE_INTRINSICS 1
 
+#ifdef GB_CORE_OPCODE_HOOK
+struct gb_s;
+static void gb_on_opcode(struct gb_s *gb, uint8_t opcode);
+#define PEANUT_GB_OPCODE_HOOK gb_on_opcode
+#endif
+
 #include "peanut_gb.h"
 
 typedef struct {
@@ -29,6 +35,12 @@ struct gb_core {
 	gb_rom_ctx_t rom_ctx;
 	gb_line_fn draw;
 	void *draw_ctx;
+	gb_serial_tx_fn serial_fn;
+	void *serial_ctx;
+	uint8_t break_b, break_c, break_d, break_e, break_h, break_l;
+	uint16_t break_pc;
+	uint32_t ld_b_b_count;
+	bool saw_break;
 };
 
 static gb_rom_ctx_t *rom_ctx(struct gb_s *gb)
@@ -79,6 +91,36 @@ static void gb_error_cb(struct gb_s *gb, const enum gb_error_e err,
 static struct gb_core *core_from_gb(struct gb_s *gb)
 {
 	return (struct gb_core *)((uint8_t *)gb - offsetof(struct gb_core, gb));
+}
+
+#ifdef GB_CORE_OPCODE_HOOK
+static void gb_on_opcode(struct gb_s *gb, uint8_t opcode)
+{
+	struct gb_core *core;
+
+	if (opcode != 0x40)
+		return;
+	core = core_from_gb(gb);
+	core->saw_break = true;
+	core->ld_b_b_count++;
+	core->break_b = gb->cpu_reg.bc.bytes.b;
+	core->break_c = gb->cpu_reg.bc.bytes.c;
+	core->break_d = gb->cpu_reg.de.bytes.d;
+	core->break_e = gb->cpu_reg.de.bytes.e;
+	core->break_h = gb->cpu_reg.hl.bytes.h;
+	core->break_l = gb->cpu_reg.hl.bytes.l;
+	/* PC already points at the next instruction. The breakpoint address
+	 * is the byte that held opcode 0x40. */
+	core->break_pc = (uint16_t)(gb->cpu_reg.pc.reg - 1u);
+}
+#endif
+
+static void serial_tx_cb(struct gb_s *gb, const uint8_t tx)
+{
+	struct gb_core *core = core_from_gb(gb);
+
+	if (core->serial_fn != NULL)
+		core->serial_fn(core->serial_ctx, tx);
 }
 
 static void lcd_draw_line(struct gb_s *gb, const uint8_t *pixels,
@@ -169,6 +211,47 @@ void gb_core_set_pressed(gb_core_t *core, uint8_t pressed_mask)
 	if (core == NULL)
 		return;
 	core->gb.direct.joypad = (uint8_t)~pressed_mask;
+}
+
+void gb_core_set_serial_tx(gb_core_t *core, gb_serial_tx_fn fn, void *ctx)
+{
+	if (core == NULL)
+		return;
+	core->serial_fn = fn;
+	core->serial_ctx = ctx;
+	if (fn == NULL)
+		gb_init_serial(&core->gb, NULL, NULL);
+	else
+		gb_init_serial(&core->gb, serial_tx_cb, NULL);
+}
+
+void gb_core_cpu_view(const gb_core_t *core, gb_cpu_view_t *out)
+{
+	if (out == NULL)
+		return;
+	memset(out, 0, sizeof(*out));
+	if (core == NULL)
+		return;
+	out->ld_b_b = core->saw_break;
+	out->ld_b_b_count = core->ld_b_b_count;
+	if (core->saw_break) {
+		out->b = core->break_b;
+		out->c = core->break_c;
+		out->d = core->break_d;
+		out->e = core->break_e;
+		out->h = core->break_h;
+		out->l = core->break_l;
+		out->pc = core->break_pc;
+		return;
+	}
+	out->b = core->gb.cpu_reg.bc.bytes.b;
+	out->c = core->gb.cpu_reg.bc.bytes.c;
+	out->d = core->gb.cpu_reg.de.bytes.d;
+	out->e = core->gb.cpu_reg.de.bytes.e;
+	out->h = core->gb.cpu_reg.hl.bytes.h;
+	out->l = core->gb.cpu_reg.hl.bytes.l;
+	out->a = core->gb.cpu_reg.a;
+	out->pc = core->gb.cpu_reg.pc.reg;
 }
 
 void gb_core_run_frame(gb_core_t *core, gb_line_fn draw, void *ctx)

@@ -1,5 +1,6 @@
 /build/
 /idf-build/
+/roms/third_party/blargg/*.gb
 *.o
 /sdkconfig
 /sdkconfig.old
