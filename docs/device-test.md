@@ -36,23 +36,27 @@ esptool.py --chip esp32c3 -p /dev/ttyACM0 -b 460800 write_flash \
 ## 通过标准（Checklist）
 
 - [ ] 启动日志中 `gb_boot` 显示 `flash_bytes=8388608`（8 MiB）。
-- [ ] 第 3 帧 `gb_hash sha256=` 与下表 **完全一致**（shade buffer，非 PNG）。
+- [ ] 表中 **验收帧** 的 `gb_hash sha256=` 与期望值 **完全一致**（shade buffer，非 PNG；与 `tools/test_sim_roms.sh` / `GB_HASH_FRAME` 一致）。
 - [ ] 画面四阶灰 **由浅到深** 自然，**无** 整体发绿/发洋红（若有则怀疑 RGB565 字节序需调换）。
 - [ ] 80 MHz SPI 刷新无可见撕裂、闪烁。
 - [ ] 三键 ADC 分压响应正常（松开导通应为高阻/高电压档）。
 - [ ] 运行中出现 `gb_perf` 行，记录 `fps` 与 `frame_us_avg`（实机 `esp_timer` 测量；与 passportsim 虚拟时间无关）。
 
-### 各 ROM 期望 `gb_hash`（第 3 帧）
+### 各 ROM 验收帧与期望 `gb_hash`
 
-| ROM | 期望 SHA-256（shade，固定第 3 帧） |
-| --- | --- |
-| pattern.gb | `b272c10c352f8ae1793b177f5fe08eb6de29d6c77d4f251bf3b8416602642743` |
-| dmg-acid2.gb | `46e2096b907947368d310929303a04005b39c4a278e3a7de2225c355b4522694` |
-| GalacticArmada.gb | `46e2096b907947368d310929303a04005b39c4a278e3a7de2225c355b4522694` |
-| rubik.gb | `46e2096b907947368d310929303a04005b39c4a278e3a7de2225c355b4522694` |
-| mooneye/daa.gb | `46e2096b907947368d310929303a04005b39c4a278e3a7de2225c355b4522694` |
+与维护者包内 `sim/*-expected-gb_hash.txt` 及 `sim/*-expected-gb_hash-frame.txt` 一致（由 `./tools/build_device_pack.sh` 生成）。
 
-第 3 帧时多数可卡带仍处于前导画面/空白 LCD 缓冲，故后四行哈希相同属预期；`pattern.gb` 为专用测试 ROM，哈希独立。
+| ROM | 验收帧 | 期望 SHA-256（shade） |
+| --- | ---: | --- |
+| pattern.gb | 3 | `b272c10c352f8ae1793b177f5fe08eb6de29d6c77d4f251bf3b8416602642743` |
+| dmg-acid2.gb | 10 | `f844ea760a6f1fe137f7f992c7ab1c72d34c7fcd3a807b4174a78eb04a32a458` |
+| GalacticArmada.gb | 90 | `1465249ea7857719a735a361069c29ad661bdc1c6b963a90852aa6cd5b5d1dc0` |
+| rubik.gb | 160 | `3c40d8633d138936589645dca803918ee5a51bde4b18e6a5e546fba241a95cc2` |
+| mooneye/daa.gb | 23 | `ae6bfbe8094f4162964e5c2fa4c04846546adff1ea97a0059946569c155dc885` |
+
+各 ROM 哈希 **互不相同**，用于区分烧录的镜像与卡带。
+
+带 `GB_INPUT_AT` 的镜像（Galactic Armada、Rubik）在验收帧范围内会**自动**向模拟器施加 `GB_OK_JOY`，使 `gb_hash` 与 `gb-host --hold` 一致；实机仍需按 `gb_input_at` 提示操作并单独验证按键。
 
 `gb_perf` 示例（每 60 帧一行）：
 
@@ -68,6 +72,7 @@ gb_perf frames=60 emu_us_avg=… emu_us_max=… present_us_avg=… present_us_ma
 | 日期 | |
 | ROM / 镜像 SHA-256 前缀 | |
 | `gb_boot flash_bytes` | |
+| 验收帧号 | |
 | `gb_hash`（实测） | |
 | `gb_perf` fps（任意一行） | |
 | `gb_perf` frame_us_avg（µs） | |

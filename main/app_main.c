@@ -22,11 +22,14 @@
 #define LCD_W 160
 #define LCD_H 144
 #define SHADE_BYTES (LCD_W * LCD_H)
-#define GB_HASH_FRAME 3
 #define GB_PERF_INTERVAL 60
 
 #ifndef GB_RUN_FRAMES
 #define GB_RUN_FRAMES 3
+#endif
+
+#ifndef GB_HASH_FRAME
+#define GB_HASH_FRAME 3
 #endif
 
 #ifndef GB_OK_JOY
@@ -413,12 +416,17 @@ void app_main(void)
 	for (frame = 1; GB_RUN_FRAMES <= 0 || frame <= GB_RUN_FRAMES; frame++) {
 		int64_t t0, emu_us, p0, present_us;
 		uint8_t line;
+		uint8_t joy;
 
 		if (GB_INPUT_AT != 0 && frame == GB_INPUT_AT) {
 			printf("gb_input_at frame=%d\n", frame);
 			fflush(stdout);
 		}
-		gb_core_set_pressed(core, poll_joy());
+		joy = poll_joy();
+		/* Match gb-host --hold for INPUT_AT..HASH_FRAME (passportsim + device). */
+		if (GB_INPUT_AT > 0 && frame >= GB_INPUT_AT && frame <= GB_HASH_FRAME)
+			joy = (uint8_t)(joy | (uint8_t)GB_OK_JOY);
+		gb_core_set_pressed(core, joy);
 		t0 = esp_timer_get_time();
 		gb_core_run_frame(core, capture_line, NULL);
 		emu_us = esp_timer_get_time() - t0;

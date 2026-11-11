@@ -46,7 +46,7 @@ hash_of_host_log() {
 build_one() {
 	name=$1
 	rom=$2
-	frames=$3
+	hash_frame=$3
 	joy=$4
 	input_at=$5
 	shift 5
@@ -55,10 +55,11 @@ build_one() {
 	out="$PACK/$name"
 	mkdir -p "$out"
 
-	echo "==== build $name rom=$(basename "$rom") frames=$frames"
+	echo "==== build $name rom=$(basename "$rom") hash_frame=$hash_frame run=forever"
 	idf.py -B idf-build \
 		-DGB_ROM="$rom" \
-		-DGB_RUN_FRAMES="$frames" \
+		-DGB_RUN_FRAMES=0 \
+		-DGB_HASH_FRAME="$hash_frame" \
 		-DGB_OK_JOY="$joy" \
 		-DGB_INPUT_AT="$input_at" \
 		build merge-bin
@@ -87,23 +88,28 @@ build_one() {
 		echo "$out/${name}-app.bin $(sha256_file "$out/${name}-app.bin")"
 	} >"$out/${name}.sha256"
 
-	"$HOST" --rom "$rom" --frames 3 $host_args \
+	"$HOST" --rom "$rom" --frames "$hash_frame" $host_args \
 		> "$SIM/$name-host.log" 2>&1 || true
 	expect=$(hash_of_host_log "$SIM/$name-host.log")
+	echo "$hash_frame" >"$SIM/$name-expected-gb_hash-frame.txt"
 	echo "$expect" >"$SIM/$name-expected-gb_hash.txt"
 
 	sdir="$SIM/$name"
 	mkdir -p "$sdir"
 	cmds="$sdir/commands.txt"
 	art="$sdir/once/artifacts"
-	cat >"$cmds" <<EOF
-start gbrom --boot until_app_main --boot-timeout 120s --mode deterministic --artifacts $art
-run serial:/gb_hash/ --timeout 600s --wall-budget-ms 900000 --artifacts $art
-run serial:/gb_perf/ --timeout 600s --wall-budget-ms 900000 --artifacts $art
-screenshot raw --save-as panel --artifacts $art
-serial read --cursor 0 --max-bytes 524288 --artifacts $art
-status --output json --artifacts $art
-EOF
+	{
+		echo "start gbrom --boot until_app_main --boot-timeout 120s --mode deterministic --artifacts $art"
+		if [ "$input_at" != "0" ]; then
+			echo "run serial:/gb_input_at/ --timeout 600s --wall-budget-ms 900000 --artifacts $art"
+			echo "input ok press"
+		fi
+		echo "run serial:/gb_hash/ --timeout 600s --wall-budget-ms 900000 --artifacts $art"
+		echo "run serial:/gb_perf/ --timeout 600s --wall-budget-ms 900000 --artifacts $art"
+		echo "screenshot raw --save-as panel --artifacts $art"
+		echo "serial read --cursor 0 --max-bytes 524288 --artifacts $art"
+		echo "status --output json --artifacts $art"
+	} >"$cmds"
 	set +e
 	./tools/passportsim once "$out/${name}-merged.bin" "$out/${name}.elf" \
 		"$sdir" "$cmds"
@@ -123,6 +129,21 @@ EOF
 		echo "gb_perf missing for $name" >&2
 		return 1
 	fi
+	if ! python3 - "$SIM/$name-uart.log" <<'PY'
+import json, sys
+path = sys.argv[1]
+for line in open(path):
+    if not line.startswith("{"):
+        continue
+    lint = json.loads(line).get("receipt", {}).get("timing_lint", None)
+    if lint is not None:
+        sys.exit(0 if lint == [] else 1)
+sys.exit(1)
+PY
+	then
+		echo "timing_lint not empty for $name" >&2
+		return 1
+	fi
 	cp "$SIM/$name-uart.log" "$ART/$name-uart.log"
 	find "$sdir" -name 'panel*.png' -print -quit 2>/dev/null | while read -r png; do
 		cp "$png" "$ART/$name-screenshot.png"
@@ -140,20 +161,21 @@ run_or_fail() {
 	fi
 }
 
-run_or_fail pattern "$ROOT/roms/homebrew/pattern.gb" 0 GB_BTN_A 0 \
+# Acceptance frame counts match tools/test_sim_roms.sh (shade hash at that frame).
+run_or_fail pattern "$ROOT/roms/homebrew/pattern.gb" 3 GB_BTN_A 0 \
 	--pattern-contract --check roms/homebrew/pattern.sha256
-run_or_fail dmg-acid2 "$ROOT/roms/third_party/dmg-acid2/dmg-acid2.gb" 0 GB_BTN_A 0
+run_or_fail dmg-acid2 "$ROOT/roms/third_party/dmg-acid2/dmg-acid2.gb" 10 GB_BTN_A 0
 run_or_fail galactic-armada "$ROOT/roms/third_party/galactic-armada/GalacticArmada.gb" \
-	0 GB_BTN_A 40 --hold 40:90:01
-run_or_fail rubik "$ROOT/roms/third_party/rubik/rubik.gb" 0 GB_BTN_START 100 \
+	90 GB_BTN_A 40 --hold 40:90:01
+run_or_fail rubik "$ROOT/roms/third_party/rubik/rubik.gb" 160 GB_BTN_START 100 \
 	--hold 100:160:08
-run_or_fail mooneye-daa "$ROOT/roms/third_party/mooneye/daa.gb" 0 GB_BTN_A 0
+run_or_fail mooneye-daa "$ROOT/roms/third_party/mooneye/daa.gb" 23 GB_BTN_A 0
 
 # Blargg: build and verify locally; merged image stays uncommitted and is not
 # published under the device-pack artifacts directory.
 blargg_tmp=$(mktemp -d)
 if build_one blargg-cpu-instrs "$ROOT/roms/third_party/blargg/cpu_instrs.gb" \
-	0 GB_BTN_A 0; then
+	3173 GB_BTN_A 0; then
 	cp -a "$PACK/blargg-cpu-instrs" "$blargg_tmp/" 2>/dev/null || true
 	rm -rf "$PACK/blargg-cpu-instrs"
 	rm -f "$ART/blargg-cpu-instrs-"*
