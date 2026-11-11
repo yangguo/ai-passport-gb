@@ -2,6 +2,7 @@ idf_component_register(
     SRCS "app_main.c"
     INCLUDE_DIRS "."
     REQUIRES gb_core gb_video bsp esp_timer mbedtls nvs_flash
+    PRIV_REQUIRES spi_flash esp_system
 )
 
 # The requirements scan returns inside idf_component_register, so the
@@ -32,7 +33,9 @@ add_custom_command(
 target_add_binary_data(${COMPONENT_LIB} "${GB_EMBED}" BINARY
     RENAME_TO embedded_rom
     DEPENDS "${GB_ROM}")
+get_filename_component(GB_ROM_BASENAME "${GB_ROM}" NAME)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     GB_RUN_FRAMES=${GB_RUN_FRAMES}
     GB_OK_JOY=${GB_OK_JOY}
-    GB_INPUT_AT=${GB_INPUT_AT})
+    GB_INPUT_AT=${GB_INPUT_AT}
+    GB_ROM_NAME=\"${GB_ROM_BASENAME}\")

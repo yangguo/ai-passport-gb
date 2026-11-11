@@ -180,6 +180,10 @@ esp_err_t bsp_display_init(void) {
     if (e != ESP_OK) { ESP_LOGE(TAG, "面板复位失败: %s", esp_err_to_name(e)); goto fail; }
     e = esp_lcd_panel_init(s_panel);    // SLPOUT / COLMOD / RAMCTRL
     if (e != ESP_OK) { ESP_LOGE(TAG, "面板初始化失败: %s", esp_err_to_name(e)); goto fail; }
+    /* ST7789V datasheet §15.1.11 Sleep Out (11h): wait ≥120 ms after SLPOUT
+     * before the next command. esp_lcd_panel_init() delays 100 ms there; hold
+     * off vendor commands until 120 ms has elapsed since SLPOUT. */
+    vTaskDelay(pdMS_TO_TICKS(20));
 
     for (size_t i = 0; i < sizeof(ST7789P3_CMDS) / sizeof(ST7789P3_CMDS[0]); i++) {
         const st_init_cmd_t *c = &ST7789P3_CMDS[i];
