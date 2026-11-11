@@ -12,5 +12,11 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
-CONFIG_BT_ENABLED=n
-CONFIG_ESP_WIFI_ENABLED=n
+# CONFIG_BT_ENABLED is not set
+# ESP-IDF 5.5.3's ESP_WIFI_ENABLED has no Kconfig prompt and defaults on for
+# esp32c3, so this file cannot clear it. The app never calls esp_wifi_init;
+# the linked image does not contain that symbol.
+
+# app_main holds the frame loop, mbedtls, and the LCD flush. The Peanut
+# instance itself is heap-allocated, not on this stack.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
