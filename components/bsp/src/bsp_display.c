@@ -6,9 +6,11 @@
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
 #include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_commands.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -178,12 +180,19 @@ esp_err_t bsp_display_init(void) {
 
     e = esp_lcd_panel_reset(s_panel);   // rst=-1 时走 SWRESET
     if (e != ESP_OK) { ESP_LOGE(TAG, "面板复位失败: %s", esp_err_to_name(e)); goto fail; }
-    e = esp_lcd_panel_init(s_panel);    // SLPOUT / COLMOD / RAMCTRL
-    if (e != ESP_OK) { ESP_LOGE(TAG, "面板初始化失败: %s", esp_err_to_name(e)); goto fail; }
-    /* ST7789V datasheet §15.1.11 Sleep Out (11h): wait ≥120 ms after SLPOUT
-     * before the next command. esp_lcd_panel_init() delays 100 ms there; hold
-     * off vendor commands until 120 ms has elapsed since SLPOUT. */
-    vTaskDelay(pdMS_TO_TICKS(20));
+    /* ST7789V datasheet §15.1.11 Sleep Out (11h): wait ≥120 ms after power-on
+     * sleep (SLPIN) before SLPOUT, and ≥120 ms after SLPOUT before the next
+     * command. esp_lcd_panel_init() used a single 100 ms gap only after SLPOUT. */
+    esp_rom_delay_us(120 * 1000);
+    e = esp_lcd_panel_io_tx_param(s_io, LCD_CMD_SLPOUT, NULL, 0);
+    if (e != ESP_OK) { ESP_LOGE(TAG, "SLPOUT 失败: %s", esp_err_to_name(e)); goto fail; }
+    esp_rom_delay_us(120 * 1000);
+    e = esp_lcd_panel_io_tx_param(s_io, LCD_CMD_MADCTL, (uint8_t[]) { 0 }, 1);
+    if (e != ESP_OK) { ESP_LOGE(TAG, "MADCTL 失败: %s", esp_err_to_name(e)); goto fail; }
+    e = esp_lcd_panel_io_tx_param(s_io, LCD_CMD_COLMOD, (uint8_t[]) { 0x55 }, 1);
+    if (e != ESP_OK) { ESP_LOGE(TAG, "COLMOD 失败: %s", esp_err_to_name(e)); goto fail; }
+    e = esp_lcd_panel_io_tx_param(s_io, 0xB0, (uint8_t[]) { 0x00, 0xF0 }, 2);
+    if (e != ESP_OK) { ESP_LOGE(TAG, "RAMCTRL 失败: %s", esp_err_to_name(e)); goto fail; }
 
     for (size_t i = 0; i < sizeof(ST7789P3_CMDS) / sizeof(ST7789P3_CMDS[0]); i++) {
         const st_init_cmd_t *c = &ST7789P3_CMDS[i];
