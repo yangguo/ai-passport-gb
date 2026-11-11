@@ -112,12 +112,34 @@ static void idle_forever(void)
 		vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
-static void save_load(uint8_t *ram, size_t size)
+/* NVS keys are 15 characters. `r` plus 14 hex digits of the ROM SHA-256
+ * keeps two cartridges with the same RAM size from sharing a slot. */
+static void rom_nvs_key(const uint8_t *rom, size_t rom_size, char key[16])
+{
+	mbedtls_sha256_context ctx;
+	uint8_t digest[32];
+	int i;
+
+	mbedtls_sha256_init(&ctx);
+	mbedtls_sha256_starts(&ctx, 0);
+	mbedtls_sha256_update(&ctx, rom, rom_size);
+	mbedtls_sha256_finish(&ctx, digest);
+	mbedtls_sha256_free(&ctx);
+	key[0] = 'r';
+	for (i = 0; i < 7; i++)
+		sprintf(key + 1 + 2 * i, "%02x", digest[i]);
+	key[15] = '\0';
+}
+
+static void save_load(const uint8_t *rom, size_t rom_size, uint8_t *ram,
+		      size_t size)
 {
 	nvs_handle_t handle;
 	esp_err_t err;
 	size_t got;
+	char key[16];
 
+	rom_nvs_key(rom, rom_size, key);
 	err = nvs_flash_init();
 	if (err != ESP_OK) {
 		printf("gb_save: nvs init %s\n", esp_err_to_name(err));
@@ -133,7 +155,7 @@ static void save_load(uint8_t *ram, size_t size)
 		return;
 	}
 	got = size;
-	err = nvs_get_blob(handle, "ram", ram, &got);
+	err = nvs_get_blob(handle, key, ram, &got);
 	nvs_close(handle);
 	if (err != ESP_OK || got != size) {
 		memset(ram, 0, size);
@@ -145,11 +167,14 @@ static void save_load(uint8_t *ram, size_t size)
 	fflush(stdout);
 }
 
-static void save_store(const uint8_t *ram, size_t size)
+static void save_store(const uint8_t *rom, size_t rom_size, const uint8_t *ram,
+		       size_t size)
 {
 	nvs_handle_t handle;
 	esp_err_t err;
+	char key[16];
 
+	rom_nvs_key(rom, rom_size, key);
 	err = nvs_flash_init();
 	if (err != ESP_OK) {
 		printf("gb_save: nvs init %s\n", esp_err_to_name(err));
@@ -162,7 +187,7 @@ static void save_store(const uint8_t *ram, size_t size)
 		fflush(stdout);
 		return;
 	}
-	err = nvs_set_blob(handle, "ram", ram, size);
+	err = nvs_set_blob(handle, key, ram, size);
 	if (err == ESP_OK)
 		err = nvs_commit(handle);
 	nvs_close(handle);
@@ -239,7 +264,7 @@ void app_main(void)
 			fflush(stdout);
 			idle_forever();
 		}
-		save_load(cart_ram, ram_size);
+		save_load(rom.data, rom.size, cart_ram, ram_size);
 	}
 
 	core = heap_caps_malloc(gb_core_instance_size(), MALLOC_CAP_INTERNAL);
@@ -303,7 +328,7 @@ void app_main(void)
 
 	serial_flush();
 	if (cart_ram != NULL && ram_size > 0)
-		save_store(cart_ram, ram_size);
+		save_store(rom.data, rom.size, cart_ram, ram_size);
 	gb_core_cpu_view(core, &view);
 	printf("gb_regs b=%u c=%u d=%u e=%u h=%u l=%u pc=%04x\n", view.b, view.c,
 	       view.d, view.e, view.h, view.l, view.pc);

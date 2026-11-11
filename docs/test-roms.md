@@ -133,7 +133,9 @@ is no panic. A header patched to the 2 KiB code (`0x149 = 0x01`) still
 produces the pattern-ROM shade hash
 `b272c10c352f8ae1793b177f5fe08eb6de29d6c77d4f251bf3b8416602642743`.
 On the firmware that boot logs `gb_save loaded byte0=00 missing` and, after
-the frames, `gb_save stored bytes=2048`.
+the frames, `gb_save stored bytes=2048`. The NVS key is `r` plus 14 hex
+digits of the ROM's SHA-256, so a second cartridge with the same RAM size
+does not load or replace the first cartridge's blob.
 
 No ROM in the table needs cart RAM. Games that need more than 2048 bytes
 (MBC5 with an 8 KiB SRAM, for example) do not fit this image and were not

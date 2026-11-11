@@ -21,11 +21,17 @@ if(NOT EXISTS "${GB_ROM}")
 endif()
 
 set(GB_EMBED "${CMAKE_CURRENT_BINARY_DIR}/embedded_rom.gb")
-execute_process(COMMAND "${CMAKE_COMMAND}" -E copy "${GB_ROM}" "${GB_EMBED}"
-    COMMAND_ERROR_IS_FATAL ANY)
+# Copy at build time. A configure-time copy leaves target_add_binary_data
+# watching the copy, so editing GB_ROM in place never re-embeds it.
+add_custom_command(
+    OUTPUT "${GB_EMBED}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${GB_ROM}" "${GB_EMBED}"
+    DEPENDS "${GB_ROM}"
+    VERBATIM)
 
 target_add_binary_data(${COMPONENT_LIB} "${GB_EMBED}" BINARY
-    RENAME_TO embedded_rom)
+    RENAME_TO embedded_rom
+    DEPENDS "${GB_ROM}")
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     GB_RUN_FRAMES=${GB_RUN_FRAMES}
     GB_OK_JOY=${GB_OK_JOY}
