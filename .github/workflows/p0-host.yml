@@ -1,0 +1,50 @@
+name: P0 host (Peanut-GB + pattern ROM)
+
+on:
+  pull_request:
+    paths:
+      - 'components/**'
+      - 'roms/**'
+      - 'third_party/peanut-gb/**'
+      - 'tools/**'
+      - '.github/workflows/p0-host.yml'
+  push:
+    branches:
+      - 'cursor/**'
+
+jobs:
+  p0-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install RGBDS 0.9.0
+        run: |
+          curl -sL -o /tmp/rgbds.tar.xz \
+            https://github.com/gbdev/rgbds/releases/download/v0.9.0/rgbds-0.9.0-linux-x86_64.tar.xz
+          mkdir -p "$HOME/rgbds"
+          tar -xJf /tmp/rgbds.tar.xz -C "$HOME/rgbds"
+          echo "$HOME/rgbds" >> "$GITHUB_PATH"
+
+      - name: Build homemade ROM
+        run: ./tools/build_rom.sh
+
+      - name: Host tests (LUT, frame hash, ROM gates)
+        run: ./tools/test_host.sh
+
+      - name: Show emulator stdout
+        run: |
+          ./build/gb-host --rom roms/homebrew/pattern.gb --frames 3 --png build/pattern-frame3.png | tee build/host-run.log
+
+      - name: Verify hash stable (second run)
+        run: |
+          ./build/gb-host --rom roms/homebrew/pattern.gb --frames 3 \
+            --check roms/homebrew/pattern.sha256
+
+      - name: Upload frame PNG
+        uses: actions/upload-artifact@v4
+        with:
+          name: pattern-frame3
+          path: |
+            build/pattern-frame3.png
+            build/host-run.log
