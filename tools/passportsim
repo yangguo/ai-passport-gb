@@ -1,0 +1,129 @@
+#!/bin/sh
+# Build and run the pinned passportsim, then boot this repo's merged image.
+#
+# Pins (do not float):
+#   BlackHole1/passportsim c94b793413336554283eeb9ca3888dc2a8d38c77 (v1.0.3)
+#   Rust 1.93.0 (upstream rust-toolchain.toml; setup uses the minimal profile)
+#   Local patches from yangguo/ai-passport-simulator tools/passportsim
+#   @ 8cdbe42bacb23256acd633323f91fd5760e9181b
+#     patches/0001-batch-mode.patch
+#     patches/0002-lvgl-96-object-flags.patch
+#
+# Image format, same as ai-passport-chess: idf.py merge-bin writes a flash
+# image from address 0 (build/merged.bin). The app ELF is build/ai-passport-gb.elf.
+# passportsim corpus.toml lists both, with sha256 pins. Batch commands are
+# start / run / screenshot / serial read. This script does not commit either
+# binary or the passportsim sources.
+#
+# Usage:
+#   tools/passportsim setup
+#   tools/passportsim run <merged.bin> <app.elf> <outdir>
+set -eu
+
+TOOLS_REPO=https://github.com/yangguo/ai-passport-simulator
+TOOLS_REV=8cdbe42bacb23256acd633323f91fd5760e9181b
+CACHE="${PASSPORTSIM_CACHE:-${HOME}/.cache/apsim/passportsim}"
+TOOLS_SRC="${PASSPORTSIM_TOOLS_SRC:-${CACHE}/tools-src}"
+
+usage() {
+	echo "usage: tools/passportsim setup" >&2
+	echo "       tools/passportsim run <merged.bin> <app.elf> <outdir>" >&2
+	exit 2
+}
+
+setup() {
+	mkdir -p "$CACHE"
+	if [ ! -d "$TOOLS_SRC/.git" ]; then
+		rm -rf "$TOOLS_SRC"
+		git clone --filter=blob:none --no-checkout "$TOOLS_REPO" "$TOOLS_SRC"
+	fi
+	git -C "$TOOLS_SRC" fetch --depth 1 origin "$TOOLS_REV"
+	git -C "$TOOLS_SRC" checkout --detach --quiet FETCH_HEAD
+	actual=$(git -C "$TOOLS_SRC" rev-parse HEAD)
+	if [ "$actual" != "$TOOLS_REV" ]; then
+		echo "passportsim: tools checkout is $actual" >&2
+		exit 1
+	fi
+	PASSPORTSIM_CACHE="$CACHE" "$TOOLS_SRC/tools/passportsim/setup.sh"
+}
+
+run_image() {
+	bin=$1
+	elf=$2
+	outdir=$3
+	binary="${PASSPORTSIM_BIN:-${CACHE}/src/target/release/passportsim}"
+	if [ ! -x "$binary" ]; then
+		echo "passportsim: binary missing ($binary); run: tools/passportsim setup" >&2
+		exit 1
+	fi
+	if [ ! -f "$bin" ] || [ ! -f "$elf" ]; then
+		echo "passportsim: merged image or ELF missing" >&2
+		exit 1
+	fi
+	mkdir -p "$outdir"
+	outdir=$(cd "$outdir" && pwd)
+	bin=$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")
+	elf=$(cd "$(dirname "$elf")" && pwd)/$(basename "$elf")
+	bin_sha=$(sha256sum "$bin" | awk '{print $1}')
+	elf_sha=$(sha256sum "$elf" | awk '{print $1}')
+
+	run_once() {
+		name=$1
+		home="$outdir/$name/home"
+		art="$outdir/$name/artifacts"
+		mkdir -p "$home/config" "$art"
+		cat > "$home/config/corpus.toml" <<EOF
+[gbpattern]
+bin = "$bin"
+elf = "$elf"
+sha256 = { bin = "$bin_sha", elf = "$elf_sha" }
+EOF
+		cat > "$outdir/$name/commands.txt" <<EOF
+start gbpattern --boot until_app_main --boot-timeout 60s --mode deterministic --artifacts $art
+run serial:/gb_hash/ --timeout 120s --wall-budget-ms 300000 --artifacts $art
+screenshot raw --save-as p1 --artifacts $art
+serial read --cursor 0 --max-bytes 262144 --artifacts $art
+status --output json --artifacts $art
+EOF
+		# Exit 10 is the pinned CLI's pass-with-caveats (a timing lint or
+		# tripwire). The chess runner treats that the same way. Keep going so
+		# the screenshot and serial read still happen.
+		set +e
+		PASSPORTSIM_HOME="$home" \
+			PASSPORTSIM_BATCH="$outdir/$name/commands.txt" \
+			PASSPORTSIM_BATCH_ARTIFACTS="$art" \
+			PASSPORTSIM_BATCH_KEEP_GOING=1 \
+			"$binary" status > "$outdir/$name/session.log" 2>&1
+		rc=$?
+		set -e
+		echo "$rc" > "$outdir/$name/exit_code"
+		if [ "$rc" -ne 0 ] && [ "$rc" -ne 10 ]; then
+			echo "passportsim: $name exited $rc" >&2
+			return "$rc"
+		fi
+		return 0
+	}
+
+	run_once run1
+	run_once run2
+	echo "passportsim: logs in $outdir/run1/session.log and $outdir/run2/session.log"
+}
+
+if [ $# -lt 1 ]; then
+	usage
+fi
+cmd=$1
+shift
+case "$cmd" in
+setup)
+	[ $# -eq 0 ] || usage
+	setup
+	;;
+run)
+	[ $# -eq 3 ] || usage
+	run_image "$1" "$2" "$3"
+	;;
+*)
+	usage
+	;;
+esac
