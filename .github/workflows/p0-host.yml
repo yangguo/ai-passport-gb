@@ -1,16 +1,8 @@
+# Manual only — Vincent's GitHub Actions minutes are limited.
 name: P0 host (Peanut-GB + pattern ROM)
 
 on:
-  pull_request:
-    paths:
-      - 'components/**'
-      - 'roms/**'
-      - 'third_party/peanut-gb/**'
-      - 'tools/**'
-      - '.github/workflows/p0-host.yml'
-  push:
-    branches:
-      - 'cursor/**'
+  workflow_dispatch:
 
 jobs:
   p0-host:
@@ -34,7 +26,8 @@ jobs:
 
       - name: Show emulator stdout
         run: |
-          ./build/gb-host --rom roms/homebrew/pattern.gb --frames 3 --png build/pattern-frame3.png | tee build/host-run.log
+          ./build/gb-host --rom roms/homebrew/pattern.gb --frames 3 \
+            --png build/pattern-frame3.png | tee build/host-run.log
 
       - name: Verify hash stable (second run)
         run: |

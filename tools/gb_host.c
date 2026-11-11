@@ -87,17 +87,36 @@ static void hash_shade_buffer(const uint8_t *shade, char hex_out[65])
 	sha256_hex(digest, hex_out);
 }
 
+static uint8_t shade_at(const uint8_t *shade, unsigned x, unsigned y)
+{
+	return shade[y * LCD_W + x];
+}
+
 static int check_pixel_contract(const uint8_t *shade)
 {
-	uint8_t a = shade[0];
-	uint8_t b = shade[8];
-	uint8_t c = shade[143 * LCD_W + 159];
+	const struct {
+		unsigned x, y;
+		uint8_t want;
+	} pts[] = {
+		{ 16, 32, 3 },
+		{ 24, 32, 2 },
+		{ 32, 32, 1 },
+		{ 40, 32, 0 },
+		{ 0, 0, 3 },
+		{ 8, 0, 0 },
+		{ 59, 64, 3 },
+		{ 159, 143, 0 },
+	};
 
-	if (a != 3 || b != 0 || c != 0) {
-		fprintf(stderr,
-			"pixel contract fail: (0,0)=%u (8,0)=%u (159,143)=%u\n", a,
-			b, c);
-		return 1;
+	for (size_t i = 0; i < sizeof(pts) / sizeof(pts[0]); ++i) {
+		uint8_t got = shade_at(shade, pts[i].x, pts[i].y);
+
+		if (got != pts[i].want) {
+			fprintf(stderr,
+				"pixel contract fail: (%u,%u)=%u want %u\n",
+				pts[i].x, pts[i].y, got, pts[i].want);
+			return 1;
+		}
 	}
 	return 0;
 }
