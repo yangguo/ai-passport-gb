@@ -1,4 +1,5 @@
 /build/
+/idf-build/
 *.o
 /sdkconfig
 /sdkconfig.old
