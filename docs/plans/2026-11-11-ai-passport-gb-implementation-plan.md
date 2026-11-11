@@ -426,10 +426,12 @@ git commit -m "feat: run Peanut-GB in the esp32c3 image"
 
 **Files:**
 - Create: `components/gb_video/include/gb_video.h`
+- Create: `components/gb_video/gb_video_lut.c`
 - Create: `components/gb_video/gb_video.c`
 - Create: `components/gb_video/CMakeLists.txt`
+- Create: `tools/test_lut.c`
 - Modify: `main/app_main.c`
-- Test: 主机测试仍只走 `gb_core`；显示用真机
+- Test: `tools/test_lut.c` 锁 LUT 字节；`pattern.sha256` 不覆盖中间灰阶。显示用真机
 
 **Interfaces:**
 - Consumes: `bsp_display_init`、`bsp_display_panel`、`esp_lcd_panel_draw_bitmap`；`gb_line_fn` 的 160 字节行
@@ -437,7 +439,19 @@ git commit -m "feat: run Peanut-GB in the esp32c3 image"
 
 - [ ] **Step 1: 实现 1:1**
 
-`gb_video_init` 调 `bsp_display_init`，背光 50，用黑色填满 240×320 一次。行缓冲两份，各 `160*2` 字节，内部 RAM，DMA 对齐。LUT 使用设计 9.3 的四档，按“已交换字节”的内存顺序存放。`gb_video_push_line` 忽略 `line >= 144`，目标矩形为 `x [40,200)`、`y [88+line, 89+line)`。
+`gb_video_lut.c` 不包含 IDF 头。`gb_video_shade_bytes(unsigned shade)` 返回设计 9.3 的两个字节：shade 1 是 `AD 55`，shade 2 是 `52 AA`。这是高字节在前，不是 `uint16_t` 的原生小端（原生小端会是 `55 AD` 和 `AA 52`）。
+
+`tools/test_lut.c` 断言这两对字节，以及 shade 0 为 `FF FF`、shade 3 为 `00 00`。
+
+```bash
+cc -std=c11 -Wall -Wextra -Werror -I components/gb_video/include \
+  -o build/test-lut tools/test_lut.c components/gb_video/gb_video_lut.c
+./build/test-lut
+```
+
+Expected: 退出码 0。
+
+`gb_video_init` 调 `bsp_display_init`，背光 50，用黑色填满 240×320 一次。然后在左边框用这张表画四块 8×8：坐标 `(0,88)`、`(0,96)`、`(0,104)`、`(0,112)`，shade 依次为 0、1、2、3。GB 窗口从 x=40 开始，这四块不盖住画面。行缓冲两份，各 `160*2` 字节，内部 RAM，DMA 对齐。`gb_video_push_line` 忽略 `line >= 144`，目标矩形为 `x [40,200)`、`y [88+line, 89+line)`。
 
 - [ ] **Step 2: 帧循环把回调接到 push_line**
 
@@ -448,9 +462,10 @@ git commit -m "feat: run Peanut-GB in the esp32c3 image"
 ```bash
 idf.py build
 tools/test_host.sh
+./build/test-lut
 ```
 
-Expected: 都成功。主机哈希不变。
+Expected: 都成功。`pattern.sha256` 不变。`test-lut` 通过只说明内存字节与 9.3 一致，不能代替真机对面板字节序的判断。
 
 - [ ] **Step 4: 用户真机**
 
@@ -466,6 +481,7 @@ idf.py -p PORT flash monitor
 - `flash_id` 容量。与 8 MiB 不符就停，不要改 `sdkconfig` 去凑。
 - 监视器里的 `gb_hash` 与 `roms/homebrew/pattern.sha256`。
 - 一张照片：左上角相对深，其余相对浅，画面不贴着屏幕最上沿（居中留边）。
+- 同一张或另一张照片要能看见左边框从上到下四块：亮、较亮、较暗、暗。中间两块如果发绿或发品红，说明 LUT 字节序反了。那时对调 shade 1 和 2 的字节，改 `test-lut` 的期望，并在 Q-SPI-SWAP 记下实际顺序。`pattern.gb` 只有 shade 0 和 3，不能发现这个问题。
 - 若花屏：把 `BSP_LCD_PCLK_HZ` 临时改为 `40 * 1000 * 1000` 再刷一次，照片和“用了哪个宏”一起留下。默认仓库在原因写明之前保持 80 MHz 宏。
 
 云端没有板子时，本任务以构建通过为止，PR 里写“真机未跑”。
@@ -473,7 +489,7 @@ idf.py -p PORT flash monitor
 - [ ] **Step 5: Commit**
 
 ```bash
-git add components/gb_video main
+git add components/gb_video tools/test_lut.c main
 git commit -m "feat: present DMG frames 1:1 on the ST7789"
 ```
 
@@ -652,11 +668,19 @@ git commit -m "docs: record GB timing measurements"
 rgbfix -v -p 0xFF -t AISAVE -m 0x03 -r 1 roms/homebrew/saver.gb
 ```
 
-`0x03` 是 MBC1+RAM+BATTERY。`0x149 = 1` 在 Peanut 的表里是 `0x800` 字节。程序在 cart RAM 第 0 字节写入 `0xA5`。主机测试加载、跑 3 帧、读出该字节为 `0xA5`。不要手改校验和。把这条命令放进 `tools/build_rom.sh`。
+`0x03` 是 MBC1+RAM+BATTERY。`0x149 = 1` 在 Peanut 的表里是 `0x800` 字节。程序在 cart RAM 第 0 字节写入 `0xA5`。这个写入只证明 ROM 会改 RAM。不要手改校验和。把这条命令放进 `tools/build_rom.sh`。
 
 - [ ] **Step 2: 主机上的尺寸闸门**
 
-对 `saver.gb`，`gb_core_save_size` 返回 2048。对一个把头里 RAM size 改成 32 KiB 档的拷贝，`gb_save_store` 在不链接 NVS 的主机桩上返回 `GB_ERR_SAVE`。
+对 `saver.gb`，`gb_core_save_size` 返回 2048。跑 3 帧后 cart RAM 第 0 字节是 `0xA5`。然后：
+
+1. 用主机桩 `gb_save_store` 保存这 2048 字节。
+2. 把缓冲全部写成 `0x00`。
+3. `gb_save_load` 读回。
+4. 断言第 0 字节是 `0xA5`。
+5. 第 2 步和第 4 步之间禁止调用 `gb_core_run_frame`。ROM 自己会再写 `0xA5`，跑帧之后的断言不能证明 load。
+
+对一个把头里 RAM size 改成 32 KiB 档的拷贝，`gb_save_store` 在不链接 NVS 的主机桩上返回 `GB_ERR_SAVE`，并且桩的存储不被写入。
 
 ```bash
 tools/test_host.sh
@@ -666,13 +690,11 @@ Expected: 退出码 0。
 
 - [ ] **Step 3: 设备 NVS**
 
-`gb_save_store` 在 `size <= 2048` 时 `nvs_set_blob` + `nvs_commit`。键名 `ram`，命名空间 `gb`。失败把 `esp_err_to_name` 打进日志并返回 `GB_ERR_SAVE`。启动时 `gb_save_load`；没有键则保持 Peanut 初始化后的 RAM，返回 `GB_OK`。
-
-菜单保存成功后打印 `gb_save ok bytes=<size>`。
+`gb_save_store` 在 `size <= 2048` 时 `nvs_set_blob` + `nvs_commit`。键名 `ram`，命名空间 `gb`。失败把 `esp_err_to_name` 打进日志并返回 `GB_ERR_SAVE`。启动顺序固定为：分配并清零 cart RAM，`gb_core_init`，`gb_save_load`，打印，然后才允许 `gb_core_run_frame`。没有键时保持清零后的 RAM，返回 `GB_OK`，打印 `gb_save loaded byte0=00 missing`。有键时打印 `gb_save loaded byte0=<02x>`。菜单保存成功后另打印 `gb_save ok bytes=<size>`。
 
 - [ ] **Step 4: 用户真机**
 
-刷 `saver` 构建（或用菜单选 ROM；P0–P3 只有内嵌 ROM 时，这一步就是单独刷带 saver 的镜像）。保存，分段重启，日志里 RAM 第 0 字节仍是 `0xA5`。再刷回 `pattern.gb` 的镜像时不要用全片擦除，除非打算清掉这次实验存档。
+刷 `saver` 构建（或用菜单选 ROM；P0–P3 只有内嵌 ROM 时，这一步就是单独刷带 saver 的镜像）。第一次启动的日志里，第一帧之前必须是 `gb_save loaded byte0=00 missing`。保存后分段重启。重启后同样要在第一帧之前看到 `gb_save loaded byte0=a5`。出现在帧循环之后的 `a5` 不算通过，因为 ROM 每次启动都会写这个字节。再刷回 `pattern.gb` 的镜像时不要用全片擦除，除非打算清掉这次实验存档。
 
 - [ ] **Step 5: Commit**
 

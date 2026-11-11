@@ -259,7 +259,7 @@ minigb_apu 默认 `AUDIO_SAMPLE_RATE` 32768。`AUDIO_SAMPLES` 是 `(unsigned)(32
 
 1. 解释器若放在 flash（IROM），ROM 数据若经数据 cache 读取，会抢同一块 16 KB cache（`SOC_SHARED_IDCACHE_SUPPORTED` 与数据手册的 16 KB cache）。把热点放进 IRAM 有可能减少这种互踩。收益待测。IRAM 是否放得下，等 `idf.py size`。
 2. 无 TE 脚（chess 硬件说明）。局部刷新可能撕裂。默认每帧只重画 160×144 窗口，边框只在启动时涂一次黑，这样 SPI 载荷停在 46080 字节那一档，而不是每帧 153600。撕裂是否可接受，待真机。
-3. `swap_bytes` 是 LVGL 端口的开关。直接调用 `esp_lcd_panel_draw_bitmap` 时，驱动按内存顺序送 `color_data`（ESP-IDF v5.5.3 `esp_lcd_panel_ops.h`：`x_end`/`y_end` 不含）。C3 是小端，RGB565 的高字节在内存里靠后。推断：查表结果要预先交换字节，画面才和 LVGL 路径一致。颜色对不对，用真机或 dmg-acid2 参考图核对。
+3. `swap_bytes` 是 LVGL 端口的开关。直接调用 `esp_lcd_panel_draw_bitmap` 时，驱动按内存顺序送 `color_data`（ESP-IDF v5.5.3 `esp_lcd_panel_ops.h`）。C3 是小端，`uint16_t` 的 `0xAD55` 在内存里是 `55 AD`。面板要高字节在前，所以 LUT 要存 `AD 55` 和 `52 AA`（第 9.3 节）。shade 0 和 3 看不出写反。中间档是否该用这个顺序，由 Q-SPI-SWAP 的四档条照片关闭。
 4. 三键游戏手柄若走 `BUTTON_SINGLE_CLICK`，会等 180 ms 的短按窗口。电平应来自每帧的 `bsp_button_read_mv()`。长按换层若与“OK 即 A”叠在同一次按下上，这次按下在分类完成前不能写进 joypad，否则游戏会看到一段 A。这是手势定义，延迟待测。
 5. 自制小 ROM 放在 app 的 DROM 里，不需要新的 MMU 映射，也不改分区表。可更换的大 ROM 才需要 `esp_partition_mmap`。ESP-IDF v5.5.3 分区文档：`esp_partition_mmap` 不要求调用者传入 64 KB 对齐的偏移；若 flash 地址未对齐，基址会向下对齐到 64 KB，返回指针再加回偏移。未对齐分区可能多占一页。
 6. 单核上，Peanut README 所说的“APU 独立线程”只是另一个 FreeRTOS 任务，不是第二颗核。音频会占用本来给模拟和 SPI 的时间。所以首期不初始化 I2S。
@@ -273,7 +273,7 @@ minigb_apu 默认 `AUDIO_SAMPLE_RATE` 32768。`AUDIO_SAMPLES` 是 `(unsigned)(32
 | Q-HEAP | 链接后 IRAM、内部 DRAM、最大连续块 | `idf.py size` 与启动时 `heap_caps_get_free_size` / `heap_caps_get_largest_free_block` |
 | Q-MMU | app 映射之后还剩多少 MMU 条目 | `esp_mmu_map_dump_mapped_blocks()` |
 | Q-FLASH | 芯片丝印是哪一档；flash 是否真是 8 MiB | 真机 `esptool.py flash_id`。指南和 sdkconfig 写 8 MB，本轮没有读到丝印 |
-| Q-SPI-SWAP | 直接画 bitmap 时字节序是否必须交换 | 上屏后对比已知灰阶；错了只改 LUT |
+| Q-SPI-SWAP | 直接画 bitmap 时字节序是否必须交换 | 主机测试锁住第 9.3 节的内存字节。`pattern.gb` 只用 shade 0 和 3，这两档交换前后都是 `FF FF` / `00 00`，不能发现中间档写反。真机看启动时画在左边框上的四档条：中间两档应是灰，而不是偏绿或偏品红。若偏色，对调整个 LUT 并改主机测试 |
 | Q-TEAR | 只刷新 160×144 窗口时撕裂是否可接受 | 真机视频 |
 | Q-BEZEL | 物理圆角是否吃到 1:1 或 3:2 画面 | 真机照片。几何上软件圆角带吃不到居中的 1:1 |
 | Q-LAT | 从 ADC 进入窗口到 joypad 掩码变化的时间 | `esp_timer_get_time()` 差值，真机记录。不预设毫秒数 |
@@ -428,14 +428,14 @@ void gb_video_push_line(const uint8_t *pixels160, uint8_t line);
 
 灰阶 LUT 是设计选择，对齐 dmg-acid2 README 对灰阶图的 8 位值 `$00,$55,$AA,$FF`，并按 DMG 习惯把 shade 0 当最亮、shade 3 当最暗：
 
-| shade | 8 位灰 | 小端内存中的 RGB565（已交换字节，推断，待 Q-SPI-SWAP） |
-| --- | --- | --- |
-| 0 | `0xFF` | 字节 `FF FF`（`0xFFFF`，交换与否相同） |
-| 1 | `0xAA` | 目标色 `0xAD55`，内存字节 `55 AD` |
-| 2 | `0x55` | 目标色 `0x52AA`，内存字节 `AA 52` |
-| 3 | `0x00` | 字节 `00 00` |
+| shade | 8 位灰 | 目标 RGB565 | 按地址顺序送出的内存字节（推断，待 Q-SPI-SWAP） |
+| --- | --- | --- | --- |
+| 0 | `0xFF` | `0xFFFF` | `FF FF` |
+| 1 | `0xAA` | `0xAD55` | `AD 55` |
+| 2 | `0x55` | `0x52AA` | `52 AA` |
+| 3 | `0x00` | `0x0000` | `00 00` |
 
-`0xAD55` 与 `0x52AA` 的算法：`R5 = gray>>3`，`G6 = gray>>2`，`B5 = gray>>3`。这是设计选择。真机若通道反了，只改表。
+`0xAD55` 与 `0x52AA` 的算法：`R5 = gray>>3`，`G6 = gray>>2`，`B5 = gray>>3`。这是设计选择。C3 上 `uint16_t` 的 `0xAD55` 在内存里是 `55 AD`。`esp_lcd_panel_draw_bitmap` 按地址顺序送字节，面板要高字节在前，所以表里要存 `AD 55`，不能存原生小端。shade 0 和 3 两种顺序相同。真机若中间档偏色，对调这两档的字节并改测试。
 
 1:1 路径对 GB 第 `line` 行调用：
 
@@ -510,6 +510,8 @@ gb_err_t gb_save_load(uint8_t *ram, size_t size);
 `size == 0` 时两个函数返回 `GB_OK`。`size > 2048` 时，在独立存档分区落地之前返回 `GB_ERR_SAVE`，不截断写入。2048 是设计选择的保守上限：它低于第 5 节的 NVS 公式上限，也等于 Peanut 尺寸表里的 `0x800`（2 KiB）。MBC2 的 `0x200`（512 字节）更小，同样走 NVS。8 KiB 是否放得进这块 NVS 是 Q-NVS，不在默认路径里赌。
 
 写入用 `nvs_set_blob` + `nvs_commit`。失败把错误码打到日志并返回 `GB_ERR_SAVE`。触发点是设计选择：菜单里的“保存”，以及每 30 个实际跑完的模拟帧尝试一次。`30 * 70224 / 4194304 = 0.502` 秒模拟时间，不是墙钟保证。硬关机可能丢掉最后一次成功 commit 之后的数据。
+
+验收顺序：`gb_save_load` 必须在本轮任何 `gb_core_run_frame` 之前完成，并先打印读回的第 0 字节。自制 ROM 每次启动都会把该字节写成 `0xA5`。若等 ROM 跑完再看，保存失败和保存成功会得到同一个 `0xA5`。主机测试在 `store` 之后把缓冲清零，再 `load`，中间不跑帧。真机第一次启动（没有键）打印的必须不是 `A5`；保存并分段重启后，第一帧之前的那一行必须是 `A5`。
 
 ### 9.7 `gb_audio`
 
@@ -609,7 +611,7 @@ P3 按这个顺序各测一版，不把几项优化叠在同一次记录里冒�
 | P1 | C3 固件把同一 ROM 画到屏上，串口哈希与主机一致 | 构建日志；`flash_id`；串口哈希；照片或短视频 | 构建可在 CI；刷机和拍照由持有板子的人做 |
 | P2 | 三键改变 joypad 掩码，菜单能换层 | 串口打印的掩码与层；真机按键视频 | 真机 |
 | P3 | 第 10.6 节每一行都有数字，或写明该行没跑的原因 | `docs/benchmarks/` 里的表 | 真机填数字 |
-| P4 | 2 KiB RAM 的自制 ROM 保存后重启仍在；超限返回错误 | 主机单测加真机重启日志 | 两边 |
+| P4 | 2 KiB RAM 保存后，在 ROM 执行前读回；超限返回错误 | 主机：清零后再 load，中间不跑帧。真机：第一帧之前的日志 | 两边 |
 | P5 | 可选。音频仍默认关，除非有单独的测量记录 | 打开音频前后的 `emu_us` | 真机；不做也算出 P0–P4 完成 |
 
 P0 的像素合同（自制 ROM，不是猜的画面）：
