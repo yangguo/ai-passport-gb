@@ -2,7 +2,10 @@
 #include "gb_video.h"
 
 #include "bsp_button.h"
+#include "bsp_pins.h"
 
+#include "esp_chip_info.h"
+#include "esp_flash.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -10,6 +13,7 @@
 #include "mbedtls/sha256.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "esp_private/esp_clk.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -18,9 +22,14 @@
 #define LCD_W 160
 #define LCD_H 144
 #define SHADE_BYTES (LCD_W * LCD_H)
+#define GB_PERF_INTERVAL 60
 
 #ifndef GB_RUN_FRAMES
 #define GB_RUN_FRAMES 3
+#endif
+
+#ifndef GB_HASH_FRAME
+#define GB_HASH_FRAME 3
 #endif
 
 #ifndef GB_OK_JOY
@@ -29,6 +38,10 @@
 
 #ifndef GB_INPUT_AT
 #define GB_INPUT_AT 0
+#endif
+
+#ifndef GB_ROM_NAME
+#define GB_ROM_NAME "embedded"
 #endif
 
 extern const uint8_t _binary_embedded_rom_start[] asm("_binary_embedded_rom_start");
@@ -76,6 +89,22 @@ static void hash_shade(char hex[65])
 	hex[64] = '\0';
 }
 
+static void rom_digest_prefix(const uint8_t *rom, size_t rom_size, char prefix[17])
+{
+	mbedtls_sha256_context ctx;
+	uint8_t digest[32];
+	int i;
+
+	mbedtls_sha256_init(&ctx);
+	mbedtls_sha256_starts(&ctx, 0);
+	mbedtls_sha256_update(&ctx, rom, rom_size);
+	mbedtls_sha256_finish(&ctx, digest);
+	mbedtls_sha256_free(&ctx);
+	for (i = 0; i < 8; i++)
+		sprintf(prefix + i * 2, "%02x", digest[i]);
+	prefix[16] = '\0';
+}
+
 static char s_serial[128];
 static size_t s_serial_len;
 
@@ -110,6 +139,34 @@ static void idle_forever(void)
 {
 	while (1)
 		vTaskDelay(pdMS_TO_TICKS(1000));
+}
+
+static void print_boot_telemetry(const uint8_t *rom, size_t rom_size)
+{
+	esp_chip_info_t chip;
+	uint32_t flash_id = 0;
+	uint32_t flash_size = 0;
+	uint32_t cpu_mhz;
+	char rom_prefix[17];
+	size_t heap_free;
+	size_t heap_largest;
+
+	esp_chip_info(&chip);
+	if (esp_flash_read_id(NULL, &flash_id) == ESP_OK &&
+	    esp_flash_get_size(NULL, &flash_size) != ESP_OK)
+		flash_size = 0;
+	cpu_mhz = esp_clk_cpu_freq() / 1000000U;
+	rom_digest_prefix(rom, rom_size, rom_prefix);
+	heap_free = esp_get_free_heap_size();
+	heap_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+
+	printf("gb_boot chip=esp32c3 cores=%u revision=%u flash_id=0x%06" PRIx32
+	       " flash_bytes=%" PRIu32 " cpu_mhz=%" PRIu32 " lcd_spi_hz=%d"
+	       " heap_free=%zu heap_largest=%zu rom=%s rom_sha256_prefix=%s\n",
+	       (unsigned)chip.cores, (unsigned)chip.revision, flash_id & 0xffffffU,
+	       flash_size, cpu_mhz, BSP_LCD_PCLK_HZ, heap_free, heap_largest,
+	       GB_ROM_NAME, rom_prefix);
+	fflush(stdout);
 }
 
 /* NVS keys are 15 characters. `r` plus 14 hex digits of the ROM SHA-256
@@ -216,6 +273,62 @@ static uint8_t poll_joy(void)
 	return 0;
 }
 
+typedef struct {
+	int interval_frames;
+	int64_t emu_sum;
+	int64_t emu_max;
+	int64_t present_sum;
+	int64_t present_max;
+	int64_t frame_sum;
+	size_t heap_min;
+} gb_perf_t;
+
+static void perf_reset(gb_perf_t *p)
+{
+	memset(p, 0, sizeof(*p));
+	p->heap_min = SIZE_MAX;
+}
+
+static void perf_accum(gb_perf_t *p, int64_t emu_us, int64_t present_us,
+		       size_t heap_free)
+{
+	int64_t frame_us = emu_us + present_us;
+
+	p->interval_frames++;
+	p->emu_sum += emu_us;
+	if (emu_us > p->emu_max)
+		p->emu_max = emu_us;
+	p->present_sum += present_us;
+	if (present_us > p->present_max)
+		p->present_max = present_us;
+	p->frame_sum += frame_us;
+	if (heap_free < p->heap_min)
+		p->heap_min = heap_free;
+}
+
+static void perf_print(int frame, const gb_perf_t *p)
+{
+	int64_t emu_avg = 0;
+	int64_t present_avg = 0;
+	int64_t frame_avg = 0;
+	double fps = 0.0;
+
+	if (p->interval_frames > 0) {
+		emu_avg = p->emu_sum / p->interval_frames;
+		present_avg = p->present_sum / p->interval_frames;
+		frame_avg = p->frame_sum / p->interval_frames;
+		if (p->frame_sum > 0)
+			fps = (double)p->interval_frames * 1000000.0 /
+			      (double)p->frame_sum;
+	}
+	printf("gb_perf frames=%d emu_us_avg=%" PRId64 " emu_us_max=%" PRId64
+	       " present_us_avg=%" PRId64 " present_us_max=%" PRId64
+	       " frame_us_avg=%" PRId64 " fps=%.2f heap_min=%zu\n",
+	       frame, emu_avg, p->emu_max, present_avg, p->present_max,
+	       frame_avg, fps, p->heap_min == SIZE_MAX ? 0 : p->heap_min);
+	fflush(stdout);
+}
+
 void app_main(void)
 {
 	gb_rom_t rom;
@@ -226,6 +339,8 @@ void app_main(void)
 	gb_video_config_t video = { .scale = GB_SCALE_1X_CENTER };
 	esp_err_t verr;
 	gb_cpu_view_t view;
+	gb_perf_t perf;
+	int frame;
 
 	printf("ai-passport-gb boot\n");
 	fflush(stdout);
@@ -237,6 +352,7 @@ void app_main(void)
 		fflush(stdout);
 		idle_forever();
 	}
+	print_boot_telemetry(rom.data, rom.size);
 	if (rom.size > 0x143 && rom.data[0x143] == 0xC0) {
 		printf("gb_rom: CGB-only (header 0x143 = 0xC0)\n");
 		fflush(stdout);
@@ -296,15 +412,21 @@ void app_main(void)
 		s_buttons_ready = 1;
 	}
 
-	for (int frame = 1; frame <= GB_RUN_FRAMES; frame++) {
+	perf_reset(&perf);
+	for (frame = 1; GB_RUN_FRAMES <= 0 || frame <= GB_RUN_FRAMES; frame++) {
 		int64_t t0, emu_us, p0, present_us;
 		uint8_t line;
+		uint8_t joy;
 
 		if (GB_INPUT_AT != 0 && frame == GB_INPUT_AT) {
 			printf("gb_input_at frame=%d\n", frame);
 			fflush(stdout);
 		}
-		gb_core_set_pressed(core, poll_joy());
+		joy = poll_joy();
+		/* Match gb-host --hold for INPUT_AT..HASH_FRAME (passportsim + device). */
+		if (GB_INPUT_AT > 0 && frame >= GB_INPUT_AT && frame <= GB_HASH_FRAME)
+			joy = (uint8_t)(joy | (uint8_t)GB_OK_JOY);
+		gb_core_set_pressed(core, joy);
 		t0 = esp_timer_get_time();
 		gb_core_run_frame(core, capture_line, NULL);
 		emu_us = esp_timer_get_time() - t0;
@@ -315,7 +437,9 @@ void app_main(void)
 		gb_video_flush();
 		present_us = esp_timer_get_time() - p0;
 
-		if (frame == GB_RUN_FRAMES) {
+		perf_accum(&perf, emu_us, present_us, esp_get_free_heap_size());
+
+		if (frame == GB_HASH_FRAME) {
 			char hex[65];
 
 			hash_shade(hex);
@@ -323,6 +447,10 @@ void app_main(void)
 			       " present_us=%" PRId64 "\n",
 			       hex, emu_us, present_us);
 			fflush(stdout);
+		}
+		if (frame % GB_PERF_INTERVAL == 0) {
+			perf_print(frame, &perf);
+			perf_reset(&perf);
 		}
 	}
 

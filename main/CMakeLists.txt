@@ -2,6 +2,7 @@ idf_component_register(
     SRCS "app_main.c"
     INCLUDE_DIRS "."
     REQUIRES gb_core gb_video bsp esp_timer mbedtls nvs_flash
+    PRIV_REQUIRES spi_flash esp_system
 )
 
 # The requirements scan returns inside idf_component_register, so the
@@ -10,7 +11,9 @@ idf_component_register(
 # build directory during the early scan.
 set(GB_ROM "${CMAKE_SOURCE_DIR}/roms/homebrew/pattern.gb" CACHE STRING
     "DMG ROM embedded in the firmware")
-set(GB_RUN_FRAMES "3" CACHE STRING "Emulated frames before gb_hash is printed")
+set(GB_RUN_FRAMES "3" CACHE STRING
+    "Frames to emulate; 0 runs until power-off (device pack)")
+set(GB_HASH_FRAME "3" CACHE STRING "Frame number that prints gb_hash (shade snapshot)")
 set(GB_OK_JOY "GB_BTN_A" CACHE STRING
     "Joypad mask produced while the OK key is held")
 set(GB_INPUT_AT "0" CACHE STRING
@@ -32,7 +35,10 @@ add_custom_command(
 target_add_binary_data(${COMPONENT_LIB} "${GB_EMBED}" BINARY
     RENAME_TO embedded_rom
     DEPENDS "${GB_ROM}")
+get_filename_component(GB_ROM_BASENAME "${GB_ROM}" NAME)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     GB_RUN_FRAMES=${GB_RUN_FRAMES}
+    GB_HASH_FRAME=${GB_HASH_FRAME}
     GB_OK_JOY=${GB_OK_JOY}
-    GB_INPUT_AT=${GB_INPUT_AT})
+    GB_INPUT_AT=${GB_INPUT_AT}
+    GB_ROM_NAME=\"${GB_ROM_BASENAME}\")

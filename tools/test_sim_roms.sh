@@ -43,6 +43,7 @@ build_fw() {
 	idf.py -B idf-build \
 		-DGB_ROM="$rom" \
 		-DGB_RUN_FRAMES="$frames" \
+		-DGB_HASH_FRAME="$frames" \
 		-DGB_OK_JOY="$joy" \
 		-DGB_INPUT_AT="$input_at" \
 		build
@@ -160,15 +161,14 @@ run_case() {
 }
 
 boot_idle() {
-	# Second boot of an image that can press OK, with the key left up.
+	# Image without GB_INPUT_AT: second boot with key left up (no synth hold).
 	name=$1
-	src=$2
-	rom=$3
-	frames=$4
+	rom=$2
+	frames=$3
+	joy=$4
 	"$HOST" --rom "$rom" --frames "$frames" \
 		--png "$OUT/$name-host.png" > "$OUT/$name-host.log"
-	cp "$OUT/$src.bin" "$OUT/$name.bin"
-	cp "$OUT/$src.elf" "$OUT/$name.elf"
+	build_fw "$name" "$rom" "$frames" "$joy" 0
 	run_sim "$name" plain 120s 240s 600000
 	expect=$(hash_of "$OUT/$name-host.log")
 	if ! expect_hash "$name" "$expect"; then
@@ -189,12 +189,12 @@ run_case instr_timing "$ROOT/roms/third_party/blargg/instr_timing.gb" 38 GB_BTN_
 
 run_case armada-held "$ROOT/roms/third_party/galactic-armada/GalacticArmada.gb" 90 GB_BTN_A 40 \
 	$SHORT_T $SHORT_B --hold 40:90:01
-boot_idle armada-idle armada-held \
-	"$ROOT/roms/third_party/galactic-armada/GalacticArmada.gb" 90
+boot_idle armada-idle \
+	"$ROOT/roms/third_party/galactic-armada/GalacticArmada.gb" 90 GB_BTN_A
 
 run_case rubik-held "$ROOT/roms/third_party/rubik/rubik.gb" 160 GB_BTN_START 100 \
 	$SHORT_T $SHORT_B --hold 100:160:08
-boot_idle rubik-idle rubik-held "$ROOT/roms/third_party/rubik/rubik.gb" 160
+boot_idle rubik-idle "$ROOT/roms/third_party/rubik/rubik.gb" 160 GB_BTN_START
 
 # Pattern ROM, the original 3-frame contract, now with the button poll compiled in.
 run_case pattern "$ROOT/roms/homebrew/pattern.gb" 3 GB_BTN_A 0 $SHORT_T $SHORT_B \
