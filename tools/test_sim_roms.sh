@@ -25,7 +25,12 @@ fi
 ./tools/fetch_test_roms.sh
 
 hash_of() {
-	awk '/^sha256 /{print $2; exit}' "$1"
+	hash=$(awk '/^sha256 /{print $2; exit}' "$1") || return
+	if ! printf '%s\n' "$hash" | grep -Eq '^[0-9a-f]{64}$'; then
+		echo "invalid host hash in $1" >&2
+		return 1
+	fi
+	printf '%s\n' "$hash"
 }
 
 build_fw() {
@@ -82,6 +87,8 @@ run_sim() {
 	run_timeout=$4
 	budget=$5
 	dir="$OUT/$name"
+	# Keep only receipts from this invocation when reusing an output directory.
+	rm -rf "$dir"
 	mkdir -p "$dir"
 	art="$dir/once/artifacts"
 	cmds="$dir/commands.txt"
@@ -92,6 +99,9 @@ run_sim() {
 	set -e
 	echo "$rc" > "$dir/passportsim.exit"
 	echo "sim $name mode=$mode passportsim_exit=$rc"
+	if [ "$rc" -ne 0 ]; then
+		return "$rc"
+	fi
 }
 
 uart_text() {
@@ -160,7 +170,8 @@ boot_idle() {
 	cp "$OUT/$src.bin" "$OUT/$name.bin"
 	cp "$OUT/$src.elf" "$OUT/$name.elf"
 	run_sim "$name" plain 120s 240s 600000
-	if ! expect_hash "$name" "$(hash_of "$OUT/$name-host.log")"; then
+	expect=$(hash_of "$OUT/$name-host.log")
+	if ! expect_hash "$name" "$expect"; then
 		note_fail "$name"
 	fi
 }
