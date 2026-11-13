@@ -5,7 +5,7 @@
 ## 烧录
 
 1. 将 USB 连接电脑，确认串口（Linux 多为 `/dev/ttyACM0`，macOS 多为 `/dev/cu.usbmodem*`）。
-2. 进入下载模式：按住 **上** 键上电，或按板卡说明进入 Boot。
+2. 优先让 USB Serial/JTAG 和 esptool 自动进入下载模式；若失败，按该批次板卡说明使用 **BOOT** 后复位。ESP32-C3 的下载引脚是 GPIO9，面板 **上** 键所在的 GPIO0 ADC 电阻梯不能代替 BOOT。参见 [Espressif 启动模式说明](https://docs.espressif.com/projects/esptool/en/latest/esp32c3/advanced-topics/boot-mode-selection.html)。
 3. 使用发布包中的 **合并镜像**（推荐）：
 
 ```bash
@@ -14,6 +14,8 @@ esptool.py --chip esp32c3 -p /dev/ttyACM0 -b 460800 write_flash \
 ```
 
 将 `pattern-merged.bin` 换成对应 ROM 名称（`dmg-acid2-merged.bin`、`galactic-armada-merged.bin`、`rubik-merged.bin`、`mooneye-daa-merged.bin` 等）。各文件 SHA-256 见包内 `*.sha256` 清单。
+
+完整设备包同时包含 `LICENSE`、`notices/` 和 `sources/`，包括 Rubik 与 HomebrewOwl.GB 的固定源码和构建说明。复制设备包时保留这些材料；在包根目录运行 `sha256sum -c manifest.sha256` 可核对全部发布文件。
 
 4. 分块烧录（可选）：
 
@@ -56,7 +58,7 @@ esptool.py --chip esp32c3 -p /dev/ttyACM0 -b 460800 write_flash \
 
 各 ROM 哈希 **互不相同**，用于区分烧录的镜像与卡带。
 
-带 `GB_INPUT_AT` 的镜像（Galactic Armada、Rubik）在验收帧范围内会**自动**向模拟器施加 `GB_OK_JOY`，使 `gb_hash` 与 `gb-host --hold` 一致；实机仍需按 `gb_input_at` 提示操作并单独验证按键。
+带 `GB_INPUT_AT` 的镜像（Galactic Armada、Rubik）在 `GB_INPUT_AT..GB_HASH_FRAME` 范围内会**自动**施加 `GB_OK_JOY`，模拟器和真机都会如此，使 `gb_hash` 与 `gb-host --hold` 一致。自动输入不能证明实体按键有效：待验收帧之后再测试按键，或使用 `GB_INPUT_AT=0` 的镜像单独验证。
 
 `gb_perf` 示例（每 60 帧一行）：
 
@@ -85,3 +87,4 @@ gb_perf frames=60 emu_us_avg=… emu_us_max=… present_us_avg=… present_us_ma
 
 - 固件 **不含** Blargg 二进制；`cpu_instrs` 仅维护者在本地 `tools/fetch_test_roms.sh` 后自行构建，**不得** 提交或分发 ROM 文件。
 - `passportsim` 仅用于 CI/维护者预检；其 `emu_us` 为访客虚拟时钟，**不能** 代替上表实机性能。
+- `GB_RUN_FRAMES=0` 的设备包持续运行，当前存档只在有限帧运行结束时写入 NVS；持续运行包尚无手动保存入口，不能据此宣称掉电存档已验收。

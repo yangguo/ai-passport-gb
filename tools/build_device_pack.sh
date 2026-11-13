@@ -13,6 +13,8 @@ HOST=./build/gb-host
 PACK="$ART/pack"
 SIM="$ART/sim"
 
+./tools/package_notices.sh "$ART"
+
 if ! command -v idf.py >/dev/null 2>&1; then
 	# shellcheck disable=SC1091
 	. "${IDF_PATH:-$HOME/esp/esp-idf}/export.sh"
@@ -35,10 +37,6 @@ if [ ! -x ./tools/passportsim ] ||
 	./tools/passportsim setup
 fi
 
-sha256_file() {
-	sha256sum "$1" | awk '{print $1}'
-}
-
 hash_of_host_log() {
 	awk '/^sha256 /{print $2; exit}' "$1"
 }
@@ -53,7 +51,9 @@ build_one() {
 	host_args=${*:-}
 
 	out="$PACK/$name"
-	mkdir -p "$out"
+	# A failed rebuild must not leave a previous image under the new pack name.
+	rm -rf "$out" || return
+	mkdir -p "$out" || return
 
 	echo "==== build $name rom=$(basename "$rom") hash_frame=$hash_frame run=forever"
 	idf.py -B idf-build \
@@ -62,13 +62,15 @@ build_one() {
 		-DGB_HASH_FRAME="$hash_frame" \
 		-DGB_OK_JOY="$joy" \
 		-DGB_INPUT_AT="$input_at" \
-		build merge-bin
+		build merge-bin || return
 
-	cp idf-build/merged-binary.bin "$out/${name}-merged.bin"
-	cp idf-build/bootloader/bootloader.bin "$out/${name}-bootloader.bin"
-	cp idf-build/partition_table/partition-table.bin "$out/${name}-partition-table.bin"
-	cp idf-build/ai-passport-gb.bin "$out/${name}-app.bin"
-	cp idf-build/ai-passport-gb.elf "$out/${name}.elf"
+	# build_one is called in a condition, which disables POSIX sh's set -e
+	# inside the function. Propagate command failures explicitly.
+	cp idf-build/merged-binary.bin "$out/${name}-merged.bin" || return
+	cp idf-build/bootloader/bootloader.bin "$out/${name}-bootloader.bin" || return
+	cp idf-build/partition_table/partition-table.bin "$out/${name}-partition-table.bin" || return
+	cp idf-build/ai-passport-gb.bin "$out/${name}-app.bin" || return
+	cp idf-build/ai-passport-gb.elf "$out/${name}.elf" || return
 
 	{
 		echo "# Flash ai-passport-gb ($name)"
@@ -79,23 +81,27 @@ build_one() {
 		echo "  0x0 $out/${name}-bootloader.bin \\"
 		echo "  0x8000 $out/${name}-partition-table.bin \\"
 		echo "  0x10000 $out/${name}-app.bin"
-	} >"$out/${name}-flash.cmd"
+	} >"$out/${name}-flash.cmd" || return
 
-	{
-		echo "$out/${name}-merged.bin $(sha256_file "$out/${name}-merged.bin")"
-		echo "$out/${name}-bootloader.bin $(sha256_file "$out/${name}-bootloader.bin")"
-		echo "$out/${name}-partition-table.bin $(sha256_file "$out/${name}-partition-table.bin")"
-		echo "$out/${name}-app.bin $(sha256_file "$out/${name}-app.bin")"
-	} >"$out/${name}.sha256"
+	(
+		cd "$out" || exit
+		sha256sum "${name}-merged.bin" "${name}-bootloader.bin" \
+			"${name}-partition-table.bin" "${name}-app.bin"
+	) >"$out/${name}.sha256" || return
 
 	"$HOST" --rom "$rom" --frames "$hash_frame" $host_args \
-		> "$SIM/$name-host.log" 2>&1 || true
-	expect=$(hash_of_host_log "$SIM/$name-host.log")
-	echo "$hash_frame" >"$SIM/$name-expected-gb_hash-frame.txt"
-	echo "$expect" >"$SIM/$name-expected-gb_hash.txt"
+		> "$SIM/$name-host.log" 2>&1 || return
+	expect=$(hash_of_host_log "$SIM/$name-host.log") || return
+	if ! printf '%s\n' "$expect" | grep -Eq '^[0-9a-f]{64}$'; then
+		echo "invalid host hash for $name" >&2
+		return 1
+	fi
+	echo "$hash_frame" >"$SIM/$name-expected-gb_hash-frame.txt" || return
+	echo "$expect" >"$SIM/$name-expected-gb_hash.txt" || return
 
 	sdir="$SIM/$name"
-	mkdir -p "$sdir"
+	rm -rf "$sdir" || return
+	mkdir -p "$sdir" || return
 	cmds="$sdir/commands.txt"
 	art="$sdir/once/artifacts"
 	{
@@ -109,16 +115,20 @@ build_one() {
 		echo "screenshot raw --save-as panel --artifacts $art"
 		echo "serial read --cursor 0 --max-bytes 524288 --artifacts $art"
 		echo "status --output json --artifacts $art"
-	} >"$cmds"
+	} >"$cmds" || return
 	set +e
 	./tools/passportsim once "$out/${name}-merged.bin" "$out/${name}.elf" \
 		"$sdir" "$cmds"
 	sim_rc=$?
 	set -e
-	echo "$sim_rc" >"$sdir/passportsim.exit"
+	echo "$sim_rc" >"$sdir/passportsim.exit" || return
+	if [ "$sim_rc" -ne 0 ]; then
+		echo "passportsim failed for $name (exit $sim_rc)" >&2
+		return "$sim_rc"
+	fi
 
 	find "$sdir" -type f \( -name 'session.log' -o -name '*.log' -o -name '*.json' \) \
-		-print0 2>/dev/null | xargs -0 cat >"$SIM/$name-uart.log" || true
+		-print0 2>/dev/null | xargs -0 cat >"$SIM/$name-uart.log" || return
 	got=$(sed -n 's/.*gb_hash sha256=\([0-9a-f]\{64\}\).*/\1/p' \
 		"$SIM/$name-uart.log" | tail -1)
 	if [ "$got" != "$expect" ]; then
@@ -132,26 +142,35 @@ build_one() {
 	if ! python3 - "$SIM/$name-uart.log" <<'PY'
 import json, sys
 path = sys.argv[1]
+found = False
 for line in open(path):
     if not line.startswith("{"):
         continue
     lint = json.loads(line).get("receipt", {}).get("timing_lint", None)
     if lint is not None:
-        sys.exit(0 if lint == [] else 1)
-sys.exit(1)
+        found = True
+        if lint != []:
+            sys.exit(1)
+sys.exit(0 if found else 1)
 PY
 	then
 		echo "timing_lint not empty for $name" >&2
 		return 1
 	fi
-	cp "$SIM/$name-uart.log" "$ART/$name-uart.log"
-	find "$sdir" -name 'panel*.png' -print -quit 2>/dev/null | while read -r png; do
-		cp "$png" "$ART/$name-screenshot.png"
-	done
+	cp "$SIM/$name-uart.log" "$ART/$name-uart.log" || return
+	png=$(find "$sdir" -name 'panel*.png' -print -quit) || return
+	if [ -z "$png" ]; then
+		echo "panel screenshot missing for $name" >&2
+		return 1
+	fi
+	cp "$png" "$ART/$name-screenshot.png" || return
 	echo "OK $name gb_hash=$got sim_exit=$sim_rc"
 }
 
 mkdir -p "$PACK" "$SIM"
+# Remove images left by the old runner's failed Blargg check, if present.
+rm -rf "$PACK/blargg-cpu-instrs"
+rm -f "$ART/blargg-cpu-instrs-"*
 FAIL=0
 
 # GB_RUN_FRAMES=0 → run until power-off (device testers); passportsim uses wall budget.
@@ -174,25 +193,36 @@ run_or_fail mooneye-daa "$ROOT/roms/third_party/mooneye/daa.gb" 23 GB_BTN_A 0
 # Blargg: build and verify locally; merged image stays uncommitted and is not
 # published under the device-pack artifacts directory.
 blargg_tmp=$(mktemp -d)
-if build_one blargg-cpu-instrs "$ROOT/roms/third_party/blargg/cpu_instrs.gb" \
-	3173 GB_BTN_A 0; then
-	cp -a "$PACK/blargg-cpu-instrs" "$blargg_tmp/" 2>/dev/null || true
-	rm -rf "$PACK/blargg-cpu-instrs"
-	rm -f "$ART/blargg-cpu-instrs-"*
+if (
+	# Never put the unlicensed image in the public artifact tree, even while
+	# verification is running or if it fails.
+	ART="$blargg_tmp"
+	PACK="$ART/pack"
+	SIM="$ART/sim"
+	mkdir -p "$PACK" "$SIM" || exit
+	build_one blargg-cpu-instrs "$ROOT/roms/third_party/blargg/cpu_instrs.gb" \
+		3173 GB_BTN_A 0
+); then
 	echo "blargg-cpu-instrs: sim OK (images not published)"
 else
 	FAIL=1
 fi
 rm -rf "$blargg_tmp"
 
-{
+manifest_tmp=$(mktemp "$ART/.manifest.XXXXXX")
+(
+	cd "$ART"
 	echo "# Device pack artifact SHA-256 ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
-	find "$PACK" "$ART" -maxdepth 2 -type f \( -name '*.bin' -o -name '*.sha256' \
-		-o -name '*-uart.log' -o -name '*-screenshot.png' \) 2>/dev/null |
+	{
+		find pack notices sources -type f
+		find . -maxdepth 1 -type f \( -name LICENSE -o -name '*-uart.log' \
+			-o -name '*-screenshot.png' \)
+	} |
 		sort | while read -r f; do
-		printf '%s %s\n' "$(sha256_file "$f")" "$f"
+			sha256sum "$f"
 	done
-} >"$ART/manifest.sha256"
+) >"$manifest_tmp"
+mv "$manifest_tmp" "$ART/manifest.sha256"
 
 if [ "$FAIL" -ne 0 ]; then
 	echo "build_device_pack: failures" >&2

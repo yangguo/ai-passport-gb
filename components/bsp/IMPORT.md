@@ -16,8 +16,7 @@
   - `include/bsp_power.h`
   - `BSP_BTN_GPIO` in `include/bsp_pins.h`
   Those files are listed in anki `components/bsp/IMPORT.md`. They are
-  left out on purpose; P1 does not enter deep sleep, and the display
-  sources match upstream byte for byte.
+  left out on purpose; P1 does not enter deep sleep.
 - Build edits, so the app does not download or link LVGL:
   - `src/bsp_display_lvgl.c` and `src/bsp_display_rounding.c` stay in the
     tree and are omitted from `CMakeLists.txt` `SRCS`. Upstream's own
@@ -25,5 +24,9 @@
     and the two component-manager dependencies. `idf_component.yml`
     therefore does not list `lvgl/lvgl` or `espressif/esp_lvgl_port`.
   - `REQUIRES` drops `esp_lvgl_port` for the same reason.
+- Display runtime edit: `src/bsp_display.c` replaces the driver's default
+  ST7789 initialization with the same MADCTL/COLMOD setup and an explicit
+  SLPOUT delay of 120 ms before DISPON. The display source therefore no
+  longer matches upstream byte for byte.
 - Audio sources are still compiled. Nothing in this firmware calls
   `bsp_audio_init()`, so I2S is not initialized.
