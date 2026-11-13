@@ -1,6 +1,6 @@
 # ai-passport-gb
 
-在 FoloToy AI Passport（ESP32-C3 + ST7789）上移植原版 Game Boy（DMG）模拟器。本仓库不含 ROM。
+在 FoloToy AI Passport（ESP32-C3 + ST7789）上移植原版 Game Boy（DMG）模拟器。本仓库不含 ROM。许可证见 `LICENSE`（MIT，Copyright (c) 2026 yangguo）。Peanut-GB 的署名保留要求见设计第 15.1.1 节。
 
 设计：`docs/design/2026-11-11-ai-passport-gb-design.md`
 

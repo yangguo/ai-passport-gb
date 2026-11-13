@@ -11,7 +11,7 @@
 - 引脚宏请求 SPI 80 MHz。同一上游历史上曾是 40 MHz，而且没有本板验收记录。设计不把 80 MHz 当成已经出现在线上的时钟。
 - 现有 LVGL 代码用 40 行 DMA 缓冲（240×40×2 = 19200 字节）。硬件指南仍写 20 行 / 约 9.6 KB。以代码宏为准。GB 路径不启用 LVGL。
 - 输入只有 GPIO0 上的三键电阻梯，不能同时按两键。用户提过的 8 个 GPIO 与现有占用全部冲突。
-- 默认路径：分区表不动，固件内嵌自制 ROM；画面 1:1 居中；音频关闭；三键加暂停菜单换层。这些是建议默认值，决定权在第 14 节。
+- 已决定的路径（2026-11-11，Vincent，第 14 节）：分区表不动，固件内嵌自制 ROM；画面 1:1 居中；音频关闭；三键加暂停菜单换层；仓库许可证 MIT。
 
 ## 2. 证据等级
 
@@ -24,7 +24,7 @@
 | 推断 | 由事实推出的工程判断。效果未测时，旁边标待测。 |
 | 待确认 | 材料互相矛盾，或必须真机 / 首次构建才能知道。写明用哪条观测关闭它。 |
 | 目标 | 希望达到的产品结果。在测到之前不是验收线。 |
-| 设计选择 | 可以改的决定。建议默认值写在第 14 节。 |
+| 设计选择 | 实现时采用的取舍。第 14 节的 8 项已于 2026-11-11 由 Vincent 定下。 |
 
 不采用 PocketStar（另一块 ESP32-C3 小 OLED 掌机）的社区帧率。面板、分辨率、SPI 和固件都不同，本仓库也没有复现。
 
@@ -312,7 +312,7 @@ app_main
 ```text
 CMakeLists.txt
 sdkconfig.defaults
-partitions.csv                      # 与 33d3d1d 相同，直到第 14 节改决定
+partitions.csv                      # 与 33d3d1d 相同。P0–P3 不改，第 14 节第 2 项已决定
 main/app_main.c
 main/CMakeLists.txt
 components/bsp/                     # 从锁定的 anki BSP 复制，附 IMPORT.md
@@ -469,7 +469,7 @@ void gb_input_poll(gb_input_state_t *out, int64_t now_us);
 
 `gb_input_poll` 每帧调用一次。解码用 `BSP_BTN_MV_TABLE` 的半开区间，与 BSP 相同。读失败（`bsp_button_read_mv` 返回 -1）时本帧掩码为 0，不当成 UP。
 
-建议的手势，供 Vincent 否决：
+已决定的手势（2026-11-11，Vincent）：
 
 - 层 0：UP→Up，DOWN→Down，OK→A。
 - 层 1：UP→Left，DOWN→Right，OK→B。
@@ -525,11 +525,11 @@ P5 之前不定义 `ENABLE_SOUND=1`，不把 minigb_apu 编进固件。
 
 ### 10.1 ROM 放哪
 
-建议默认：P0–P3 不改 `partitions.csv`。自制 ROM 用 `target_add_binary_data` 或等价方式链进 app。工厂分区仍是 `0x10000/0x7F0000`。
+已决定：P0–P3 不改 `partitions.csv`。自制 ROM 用 `target_add_binary_data` 或等价方式链进 app。工厂分区仍是 `0x10000/0x7F0000`。
 
 理由：上游、chess、anki 都用这张表；改表并刷全镜像可能清掉 NVS；自制 ROM 远小于 app 分区。
 
-备选，仅在 Vincent 要换 ROM 且看到固件体积之后再改。下面是对齐到 64 KB 的草案，总和停在 `0x800000` 以内，彼此不重叠：
+下面的分区草案不是 P0–P3 的工作。只有在以后另作决定、并且 `idf.py size` 已经量过固件体积时才考虑。表对齐到 64 KB，总和停在 `0x800000` 以内，彼此不重叠：
 
 | 名 | 偏移 | 大小 | 说明 |
 | --- | --- | --- | --- |
@@ -545,7 +545,7 @@ P5 之前不定义 `ENABLE_SOUND=1`，不把 minigb_apu 编进固件。
 
 ### 10.2 画面
 
-建议默认：1:1 居中，只刷新 GB 窗口，边框启动时涂黑。LUT 见 9.3。
+已决定：1:1 居中，只刷新 GB 窗口，边框启动时涂黑。LUT 见 9.3。3:2 留到测完时钟和 `present_us` 之后。
 
 备选：3:2（240×216）居中。等 Q-CLK 和 P3 的 `present_us` 有了再做。重复模式（每两个源像素输出三个）在实现时写死一种并放进测试，不在本文假装已经选了 A,A,B 还是 A,B,B。
 
@@ -553,7 +553,7 @@ P5 之前不定义 `ENABLE_SOUND=1`，不把 minigb_apu 编进固件。
 
 ### 10.3 输入
 
-建议默认：第 9.4 节的三键加菜单。不改板。
+已决定：第 9.4 节的三键加菜单。任意时刻最多一个 GB 键。不改板。
 
 备选，都不是 P2：
 
@@ -565,11 +565,11 @@ P5 之前不定义 `ENABLE_SOUND=1`，不把 minigb_apu 编进固件。
 
 ### 10.4 音频
 
-建议默认：关闭。`gb_audio_init` 失败返回，不碰 I2S。P5 才评估 minigb_apu。即便做，也先在主机上证明 PCM 尺寸，再在设备上单独测 `emu_us` 增加了多少。README 已说明 SDL 示例的 APU 时序不准确。
+已决定：首期关闭。`gb_audio_init` 返回 `GB_ERR_DISABLED`，不碰 I2S，不把 minigb_apu 编进固件。P5 若要做，须另有决定。即便做，也先在主机上证明 PCM 尺寸，再在设备上单独测 `emu_us` 增加了多少。Peanut README 已说明 SDL 示例的 APU 时序不准确。
 
 ### 10.5 存档
 
-建议默认：仅 `size <= 2048` 走现有 NVS；更大返回 `GB_ERR_SAVE`。独立 `gb_save` 分区跟 10.1 一起决定。
+已决定：仅 `size <= 2048` 走现有 NVS；更大返回 `GB_ERR_SAVE`。P0–P3 不新增 `gb_save` 分区。
 
 不在掉电中断里“最后写一次”。没有这个回调。
 
@@ -583,7 +583,7 @@ P3 按这个顺序各测一版，不把几项优化叠在同一次记录里冒�
 4. 只改 DMA：确认双行缓冲相对单行的 `present_us`。
 5. 最后才打开 Peanut 的 `frame_skip` 或 `interlace`，单独成行。默认仍关。
 
-每一行都有 `emu_us` 和 `present_us`。没有“达到 60”这种门槛。产品上是否接受跳帧，等数字出来再由 Vincent 定。
+每一行都有 `emu_us` 和 `present_us`。没有“达到 60”这种门槛。跳帧和隔行默认关，在 P3 的表填上之前不是验收线。测完之后是否打开，不在第 14 节这 8 项里。
 
 ## 11. 性能预算与测量
 
@@ -626,7 +626,7 @@ P0 的像素合同（自制 ROM，不是猜的画面）：
 | --- | --- | --- | --- |
 | R1 | 把 80 MHz 当成已验收 | 宏是 80，历史是 40，chess 写明未验收 | 默认 1:1；Q-CLK |
 | R2 | 共享 16 KB cache 把模拟拖慢 | 数据手册与 `SOC_SHARED_IDCACHE_SUPPORTED` | P3 对照，不预写加速比 |
-| R3 | 三键玩不了方向+A | 电阻梯 | 写进产品限制；第 14 节 |
+| R3 | 三键玩不了方向+A | 电阻梯 | 已接受的产品限制（第 14 节第 1 项） |
 | R4 | 改分区清掉 NVS | 上游 build-and-test.md | P0–P3 不改表 |
 | R5 | 大 cart RAM 分配失败 | 400 KB SRAM 含 16 KB cache，IDF 占用未测 | 失败返回 `GB_ERR_NO_MEM` |
 | R6 | 商业 ROM 进仓库 | 范围 | 不下载、不提交、不把路径写进默认构建 |
@@ -638,20 +638,20 @@ P0 的像素合同（自制 ROM，不是猜的画面）：
 | R12 | Peanut 行注释写 0–144 含端点 | 绘制路径只在 LY&lt;144 | 适配层丢弃 `line>=144` |
 | R13 | 直接画 bitmap 的字节序 | LVGL 路径开了 `swap_bytes` | Q-SPI-SWAP |
 
-## 14. 需要 Vincent 决定的问题
+## 14. 已决定（2026-11-11，Vincent）
 
-每条都有建议默认值。在否决之前，实现按默认值做。
+下面 8 项全部采用当时的建议默认值。实现按这些决定做。
 
-1. 输入。是否接受现有三键、暂停菜单换层，并接受任意时刻最多一个 GB 键？建议：接受，作为 P2。改板、I2C 扩展和 BLE 不进入 P2。
-2. ROM 分区。P0–P3 是否保持官方分区表，只内嵌自制 ROM？建议：保持不动。第 10.1 节的分区草案等固件体积出来再定。
-3. 缩放。是否接受默认 1:1 居中，3:2 只在测完时钟和 `present_us` 之后再做？建议：接受。
-4. 仓库许可证。是否采用 MIT，并另附第三方声明？建议：MIT。与 Peanut-GB、minigb_apu、FoloToy BSP 一致。本 PR 不加 `LICENSE` 文件。
-5. 流畅的定义。看到 P3 的表之前，是否同意不把跳帧或隔行写成验收线？建议：同意。两者默认关。
-6. 音频。是否同意首期不初始化 I2S？建议：同意。P5 可选，不做不影响前面各阶段。
-7. 第三方测试 ROM。是否同意仓库只提交自制 ROM 的源和产物；dmg-acid2、mooneye-test-suite、mealybug-tearoom-tests、age-test-roms 只作为文档中的可选用项，默认不入库？建议：同意。Blargg 在 Q-BLARGG 关闭前不用。
-8. 存档。是否同意只有 ≤2048 字节走现有 NVS，更大明确失败，分区存档跟问题 2 一起决定？建议：同意。
+1. 输入。接受现有三键和暂停菜单换层，并接受任意时刻最多一个 GB 键。这是 P2。改板、I2C 扩展和 BLE 不进入 P2。
+2. ROM 分区。P0–P3 保持官方分区表，只内嵌自制 ROM。第 10.1 节的分区草案不在这几阶段实施。
+3. 缩放。默认 1:1 居中。3:2 只在测完时钟和 `present_us` 之后再做。
+4. 仓库许可证。MIT，版权所有者为 yangguo，年份 2026。根目录 `LICENSE` 即该文本。第三方声明另见第 15 节，根 `LICENSE` 不取代它们。
+5. 流畅的定义。看到 P3 的表之前，跳帧和隔行不是验收线。两者默认关。
+6. 音频。首期不初始化 I2S。P5 可选，不做不影响前面各阶段。
+7. 第三方测试 ROM。仓库只提交自制 ROM 的源和产物。dmg-acid2、mooneye-test-suite、mealybug-tearoom-tests、age-test-roms 只作为文档中的可选用项，默认不入库。Blargg 在 Q-BLARGG 关闭前不用。
+8. 存档。只有 ≤2048 字节的 cart RAM 走现有 NVS。更大直接失败，返回 `GB_ERR_SAVE`。P0–P3 不为此改分区表。
 
-已定、不再作为问题：只做 DMG；不做 GBC/GBA；不收录商业 ROM 和任天堂 boot ROM。
+此前已定、本次未改：只做 DMG；不做 GBC/GBA；不收录商业 ROM 和任天堂 boot ROM。
 
 ## 15. 许可证与复用义务
 
@@ -659,12 +659,22 @@ P0 的像素合同（自制 ROM，不是猜的画面）：
 
 | 作品 | 许可证 | 复用时要做的事 |
 | --- | --- | --- |
-| Peanut-GB `peanut_gb.h` @ `d0bcca77` | 文件头 MIT。版权 2018–2023 Mahyar Koshkouei。声明含 SameBoy 片段，版权 2015–2019 Lior Halphon，摘取时为 MIT | 原样保留文件头。不删版权声明。修改的话在文件头无法覆盖的派生文件上另加说明；本设计要求不改这个头文件 |
-| minigb_apu @ 同一 Peanut-GB 树，`examples/sdl2/minigb_apu/LICENSE` | MIT。版权 2017 Alex Baines，2019 Mahyar Koshkouei | 只有 P5 且 Vincent 同意后才复制。复制时带上 `LICENSE` 和 `minigb_apu.h` 顶部的说明。首期不编进固件 |
+| Peanut-GB `peanut_gb.h` @ `d0bcca77` | 文件头 MIT。版权 2018–2023 Mahyar Koshkouei。声明含 SameBoy 片段，版权 2015–2019 Lior Halphon，摘取时为 MIT | 见 15.1.1。不改这个头文件 |
+| minigb_apu @ 同一 Peanut-GB 树，`examples/sdl2/minigb_apu/LICENSE` | MIT。版权 2017 Alex Baines，2019 Mahyar Koshkouei | 首期不复制、不编进固件（第 14 节第 6 项）。P5 若另有决定要做，复制时带上该 `LICENSE` 和 `minigb_apu.h` 顶部的说明 |
 | FoloToy BSP @ `33d3d1d`，anki 副本 `components/bsp/LICENSE` | MIT。版权 2026 FoloToy | 复制整个 `components/bsp` 时保留 `LICENSE`。写 `IMPORT.md`，记下上游提交、anki 提交、以及相对上游多出来的 deep-sleep 文件（anki `IMPORT.md` 已列出 `bsp_power.c`）。不要只跟随 FoloToy `main` |
 | RGBDS | MIT。版权 1996–2025 Carsten Sørensen 与贡献者 | 只作构建工具。不把 RGBDS 源码 vendoring 进本仓库。自制 ROM 源码是本项目的作品 |
 
-本仓库 GitHub `licenseInfo` 目前为空。在问题 4 有答复之前不添加根 `LICENSE`。
+### 15.1.1 Peanut-GB 的 MIT 署名
+
+Peanut-GB 文件头的 MIT 条件是：所有副本和实质性部分都必须带上上述版权声明和许可声明。本仓库因此做到这三件事：
+
+- 收入 `peanut_gb.h` 时保留它的整段文件头，包括 “Copyright (c) 2018-2023 Mahyar Koshkouei”，以及其中关于 SameBoy、版权 2015–2019 Lior Halphon 的段落。
+- `third_party/peanut-gb/LICENSE` 是这段 MIT 正文的副本，不改句子。
+- 根目录 `LICENSE` 只覆盖本仓库自己的代码和自制 ROM，版权为 Copyright (c) 2026 yangguo。它不替换、不删除 Peanut-GB、SameBoy 片段、minigb_apu 或 FoloToy BSP 的声明。
+
+### 15.1.2 本仓库许可证
+
+根 `LICENSE` 已按第 14 节第 4 项加入：MIT，Copyright (c) 2026 yangguo。
 
 ### 15.2 候选测试 ROM
 
@@ -672,7 +682,7 @@ P0 的像素合同（自制 ROM，不是猜的画面）：
 
 | 候选 | 来源 | 许可证 | 本设计的用法 |
 | --- | --- | --- | --- |
-| 自制 `AIPATTERN` | 计划里的 `roms/homebrew/pattern.asm`，RGBDS 组装 | 随本仓库许可证（待问题 4）。源码由本项目编写 | P0 起用。可以提交源码和构建产物 |
+| 自制 `AIPATTERN` | 计划里的 `roms/homebrew/pattern.asm`，RGBDS 组装 | 本仓库 MIT，Copyright (c) 2026 yangguo。源码由本项目编写 | P0 起用。可以提交源码和构建产物 |
 | dmg-acid2 | [mattcurrie/dmg-acid2](https://github.com/mattcurrie/dmg-acid2) `8a98ce731f96dde032ffb22ec36dc985d78fdb18`（2020-04-21） | 仓库 `LICENSE` 为 MIT，版权 2020 Matt Currie | 可选的主机 PPU 对照。默认不入库。若要提交构建产物，必须同时带上该 MIT 声明 |
 | mealybug-tearoom-tests | [mattcurrie/mealybug-tearoom-tests](https://github.com/mattcurrie/mealybug-tearoom-tests) | 仓库 `LICENSE` 为 MIT，版权 2018 Matt Currie | 可选，更严的 PPU 时序。不是“能跑”的门槛。默认不入库 |
 | mooneye-test-suite | [Gekkio/mooneye-test-suite](https://github.com/Gekkio/mooneye-test-suite) `31510e12eea6286d36eea060a6adde755e1067aa` | 该仓库 `LICENSE` 是 MIT，版权 2014–2022 Joonas Javanainen | 可选主机精度测试。默认不入库 |

@@ -15,12 +15,15 @@ mkdir -p build
 	components/gb_core/gb_core.c components/gb_video/gb_video_lut.c
 
 "$CC" $CFLAGS $INC -o build/test-lut tools/test_lut.c components/gb_video/gb_video_lut.c
+"$CC" $CFLAGS $INC -o build/test-core tools/test_core.c components/gb_core/gb_core.c
 
 ./build/test-lut
 
 if [ ! -f roms/homebrew/pattern.gb ]; then
 	./tools/build_rom.sh
 fi
+
+./build/test-core roms/homebrew/pattern.gb
 
 ./build/gb-host --rom roms/homebrew/pattern.gb --frames 3 \
 	--check roms/homebrew/pattern.sha256 \
@@ -47,6 +50,10 @@ import sys
 p=sys.argv[1]
 d=bytearray(open(p,'rb').read())
 d[0x147]=0xFE
+x=0
+for i in range(0x134, 0x14D):
+    x=(x - d[i] - 1) & 0xFF
+d[0x14D]=x
 open(p,'wb').write(d)
 " "$UNSUPPORTED"
 
@@ -58,5 +65,6 @@ if [ "$bad_rc" -eq 0 ]; then
 	echo "unsupported MBC ROM should fail: $err" >&2
 	exit 1
 fi
+printf '%s\n' "$err" | grep -qx "gb_core_save_size: 3"
 
 echo "test_host: ok"
