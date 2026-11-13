@@ -67,8 +67,9 @@ one firmware image per ROM (`-DGB_ROM`, `-DGB_RUN_FRAMES`, `-DGB_OK_JOY`,
 ## Results
 
 Shade hash is SHA-256 of the 160×144 Game Boy shade buffer. "Sim hash" is
-the `gb_hash` line from the firmware UART. A match means the panel contents
-and the host frame are the same picture.
+the `gb_hash` line from the firmware UART. A match proves that the firmware
+and host shade buffers agree. SPI transfer, panel pixels, and RGB565 colour
+order still require a screenshot or real-device observation.
 
 | ROM | Frames | Host | Sim | Shade hash |
 | --- | --- | --- | --- | --- |
