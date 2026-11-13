@@ -82,6 +82,14 @@ static void lcd_draw_line(struct gb_s *gb, const uint8_t *pixels,
 
 static gb_err_t init_from_rom(struct gb_s *gb, gb_rom_ctx_t *ctx)
 {
+	if (ctx->rom_size < 0x150)
+		return GB_ERR_BAD_ARG;
+	/* Peanut-GB indexes fixed size-code tables during gb_init(). */
+	if (ctx->rom[0x148] > 8 || ctx->rom[0x149] > 5)
+		return GB_ERR_UNSUPPORTED;
+	if (ctx->rom_size < ((size_t)0x8000u << ctx->rom[0x148]))
+		return GB_ERR_BAD_ARG;
+
 	gb->direct.priv = ctx;
 	enum gb_init_error_e err =
 		gb_init(gb, rom_read, cart_ram_read, cart_ram_write, gb_error_cb,
