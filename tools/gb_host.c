@@ -143,101 +143,300 @@ static int rgb565_to_png(const char *path, const uint8_t *rgb565)
 	return ok ? 0 : 1;
 }
 
-static int run_rom(const uint8_t *rom, size_t rom_size, unsigned frames,
-		   const char *png_path, const char *check_path)
+enum { HOLD_MAX = 16, SERIAL_MAX = 1024 * 1024 };
+
+typedef struct {
+	unsigned start;
+	unsigned end;
+	uint8_t mask;
+} hold_t;
+
+typedef struct {
+	unsigned frames;
+	const char *png_path;
+	const char *shade_path;
+	const char *check_path;
+	const char *serial_path;
+	int pattern_contract;
+	int judge_mooneye;
+	int judge_blargg;
+	int stop_on_result;
+	hold_t holds[HOLD_MAX];
+	int nholds;
+} run_opts_t;
+
+typedef struct {
+	char *data;
+	size_t len;
+	size_t cap;
+} serial_buf_t;
+
+static void serial_push(void *ctx, uint8_t byte)
+{
+	serial_buf_t *buf = ctx;
+
+	if (buf->len + 1 >= buf->cap) {
+		size_t next = buf->cap == 0 ? 4096 : buf->cap * 2;
+		char *grown;
+
+		if (next > SERIAL_MAX)
+			next = SERIAL_MAX;
+		if (buf->len + 1 >= next)
+			return;
+		grown = realloc(buf->data, next);
+		if (grown == NULL)
+			return;
+		buf->data = grown;
+		buf->cap = next;
+	}
+	buf->data[buf->len++] = (char)byte;
+	buf->data[buf->len] = '\0';
+}
+
+static int mooneye_fibonacci(const gb_cpu_view_t *view)
+{
+	return view->b == 3 && view->c == 5 && view->d == 8 && view->e == 13 &&
+	       view->h == 21 && view->l == 34;
+}
+
+static int mooneye_fail_sig(const gb_cpu_view_t *view)
+{
+	return view->b == 0x42 && view->c == 0x42 && view->d == 0x42 &&
+	       view->e == 0x42 && view->h == 0x42 && view->l == 0x42;
+}
+
+static int blargg_status(const char *text)
+{
+	if (text != NULL && strstr(text, "Failed") != NULL)
+		return 2;
+	if (text != NULL && strstr(text, "Passed") != NULL)
+		return 0;
+	return 4;
+}
+
+static int run_rom(const uint8_t *rom, size_t rom_size, const run_opts_t *opt)
 {
 	size_t save_size = 0;
+	unsigned frames = opt->frames;
 	gb_err_t err = gb_core_save_size(rom, rom_size, &save_size);
+	uint8_t *cart_ram = NULL;
+	serial_buf_t serial = { 0 };
+	int judge = 0;
+
+	if (rom_size > 0x143 && rom[0x143] == 0xC0) {
+		fprintf(stderr,
+			"CGB-only ROM (header 0x143 = 0xC0) is not a DMG image\n");
+		return 3;
+	}
 	if (err != GB_OK) {
 		fprintf(stderr, "gb_core_save_size: %d\n", (int)err);
 		return 1;
 	}
-	if (save_size != 0) {
-		fprintf(stderr, "expected cart RAM size 0, got %zu\n", save_size);
-		return 1;
+	if (save_size > GB_NVS_RAM_MAX) {
+		fprintf(stderr,
+			"cart RAM %zu bytes exceeds %u byte NVS limit\n",
+			save_size, (unsigned)GB_NVS_RAM_MAX);
+		return 3;
+	}
+	if (save_size > 0) {
+		cart_ram = calloc(1, save_size);
+		if (cart_ram == NULL)
+			return 1;
 	}
 
 	void *core_mem = calloc(1, gb_core_instance_size());
-	if (core_mem == NULL)
+	if (core_mem == NULL) {
+		free(cart_ram);
 		return 1;
+	}
 	gb_core_t *core = core_mem;
-	err = gb_core_init(core, rom, rom_size, NULL, 0);
+	err = gb_core_init(core, rom, rom_size, cart_ram, save_size);
 	if (err != GB_OK) {
 		fprintf(stderr, "gb_core_init: %d\n", (int)err);
+		free(cart_ram);
 		free(core_mem);
 		return 1;
 	}
+	gb_core_set_serial_tx(core, serial_push, &serial);
 
 	capture_t cap;
 	memset(&cap, 0, sizeof(cap));
 
 	char hash_prev[65] = "";
 	char hash_last[65] = "";
-	unsigned lines_drawn = 0;
+	unsigned ran = 0;
+	int stopped = 0;
 
 	for (unsigned f = 0; f < frames; ++f) {
+		uint8_t mask = 0;
+		unsigned frame_no = f + 1;
+
+		for (int h = 0; h < opt->nholds; ++h) {
+			if (frame_no >= opt->holds[h].start &&
+			    frame_no <= opt->holds[h].end)
+				mask = (uint8_t)(mask | opt->holds[h].mask);
+		}
+		gb_core_set_pressed(core, mask);
+
 		memset(&cap.shade, 0, sizeof(cap.shade));
 		memset(&cap.rgb565, 0, sizeof(cap.rgb565));
 		g_lines_drawn = 0;
 		gb_core_run_frame(core, capture_line, &cap);
-		lines_drawn = g_lines_drawn;
+		ran = frame_no;
 
 		char hex[65];
 		hash_shade_buffer(cap.shade, hex);
+		memcpy(hash_last, hex, sizeof(hash_last));
 
-		if (f == 1 && lines_drawn >= LCD_H) {
+		if (opt->pattern_contract && f == 1 && g_lines_drawn >= LCD_H) {
 			memcpy(hash_prev, hex, sizeof(hash_prev));
 			if (check_pixel_contract(cap.shade) != 0) {
+				free(serial.data);
+				free(cart_ram);
 				free(core_mem);
 				return 1;
 			}
 		}
-		if (f == 2) {
-			memcpy(hash_last, hex, sizeof(hash_last));
-			if (lines_drawn < LCD_H) {
+		if (opt->pattern_contract && f == 2) {
+			if (g_lines_drawn < LCD_H) {
 				fprintf(stderr, "frame 3: only %u lcd lines\n",
-					lines_drawn);
+					g_lines_drawn);
+				free(serial.data);
+				free(cart_ram);
 				free(core_mem);
 				return 1;
 			}
 			if (check_pixel_contract(cap.shade) != 0) {
+				free(serial.data);
+				free(cart_ram);
 				free(core_mem);
 				return 1;
 			}
 			if (hash_prev[0] != '\0' &&
 			    memcmp(hash_prev, hash_last, 64) != 0) {
 				fprintf(stderr, "frame 2/3 hash mismatch\n");
-				free(core_mem);
-				return 1;
-			}
-			if (png_path != NULL &&
-			    rgb565_to_png(png_path, cap.rgb565) != 0) {
-				fprintf(stderr, "png write failed\n");
+				free(serial.data);
+				free(cart_ram);
 				free(core_mem);
 				return 1;
 			}
 		}
+
+		if (opt->stop_on_result) {
+			gb_cpu_view_t view;
+			gb_core_cpu_view(core, &view);
+			if (opt->judge_mooneye && view.ld_b_b)
+				stopped = 1;
+			if (opt->judge_blargg && serial.data != NULL &&
+			    (strstr(serial.data, "Passed") != NULL ||
+			     strstr(serial.data, "Failed") != NULL))
+				stopped = 1;
+		}
+		if (stopped || frame_no == frames) {
+			if (opt->png_path != NULL &&
+			    rgb565_to_png(opt->png_path, cap.rgb565) != 0) {
+				fprintf(stderr, "png write failed\n");
+				free(serial.data);
+				free(cart_ram);
+				free(core_mem);
+				return 1;
+			}
+			if (opt->shade_path != NULL) {
+				FILE *sf = fopen(opt->shade_path, "wb");
+				if (sf == NULL ||
+				    fwrite(cap.shade, 1, SHADE_BYTES, sf) !=
+					    SHADE_BYTES) {
+					if (sf != NULL)
+						fclose(sf);
+					fprintf(stderr, "shade write failed\n");
+					free(serial.data);
+					free(cart_ram);
+					free(core_mem);
+					return 1;
+				}
+				fclose(sf);
+			}
+		}
+		if (stopped)
+			break;
 	}
+
+	gb_cpu_view_t view;
+	gb_core_cpu_view(core, &view);
 
 	printf("sha256 %s\n", hash_last);
 	printf("sizeof_gb_s %zu\n", gb_core_gb_struct_size());
+	printf("frames %u\n", ran);
+	printf("cart_ram %zu\n", save_size);
+	printf("mbc_header %02x\n", rom_size > 0x147 ? rom[0x147] : 0);
+	printf("cgb_flag %02x\n", rom_size > 0x143 ? rom[0x143] : 0);
+	printf("regs b=%u c=%u d=%u e=%u h=%u l=%u pc=%04x ld_b_b=%u count=%u\n",
+	       view.b, view.c, view.d, view.e, view.h, view.l, view.pc,
+	       view.ld_b_b ? 1u : 0u, view.ld_b_b_count);
 
-	if (check_path != NULL) {
+	if (opt->serial_path != NULL) {
+		FILE *sf = fopen(opt->serial_path, "wb");
+		if (sf == NULL) {
+			free(serial.data);
+			free(cart_ram);
+			free(core_mem);
+			return 1;
+		}
+		if (serial.len > 0 &&
+		    fwrite(serial.data, 1, serial.len, sf) != serial.len) {
+			fclose(sf);
+			free(serial.data);
+			free(cart_ram);
+			free(core_mem);
+			return 1;
+		}
+		fclose(sf);
+	}
+
+	if (opt->check_path != NULL) {
 		char expect[65];
-		if (load_expect_file(check_path, expect) != 0) {
+		if (load_expect_file(opt->check_path, expect) != 0) {
+			free(serial.data);
+			free(cart_ram);
 			free(core_mem);
 			return 1;
 		}
 		if (memcmp(expect, hash_last, 64) != 0) {
 			fprintf(stderr, "hash mismatch\nexpected %s\ngot      %s\n",
 				expect, hash_last);
+			free(serial.data);
+			free(cart_ram);
 			free(core_mem);
 			return 1;
 		}
 	}
 
+	if (opt->judge_mooneye) {
+		if (!view.ld_b_b) {
+			printf("mooneye result=incomplete\n");
+			judge = 4;
+		} else if (mooneye_fibonacci(&view)) {
+			printf("mooneye result=pass\n");
+			judge = 0;
+		} else if (mooneye_fail_sig(&view)) {
+			printf("mooneye result=fail\n");
+			judge = 2;
+		} else {
+			printf("mooneye result=fail\n");
+			judge = 2;
+		}
+	}
+	if (opt->judge_blargg) {
+		int st = blargg_status(serial.data);
+		const char *name = st == 0 ? "pass" : st == 2 ? "fail" : "incomplete";
+		printf("blargg result=%s\n", name);
+		judge = st;
+	}
+
+	free(serial.data);
+	free(cart_ram);
 	free(core_mem);
-	return 0;
+	return judge;
 }
 
 static int load_expect_file(const char *path, char hex_out[65])
@@ -253,30 +452,77 @@ static int load_expect_file(const char *path, char hex_out[65])
 	return 0;
 }
 
+static int parse_hold(const char *spec, hold_t *out)
+{
+	unsigned start = 0, end = 0, mask = 0;
+
+	if (sscanf(spec, "%u:%u:%x", &start, &end, &mask) != 3 || start == 0 ||
+	    end < start || mask > 0xFF)
+		return -1;
+	out->start = start;
+	out->end = end;
+	out->mask = (uint8_t)mask;
+	return 0;
+}
+
 static int cmd_run(int argc, char **argv)
 {
+	run_opts_t opt;
 	const char *rom_path = NULL;
-	const char *check_path = NULL;
-	const char *png_path = NULL;
-	unsigned frames = 3;
+
+	memset(&opt, 0, sizeof(opt));
+	opt.frames = 3;
 
 	for (int i = 1; i < argc; ++i) {
 		if (strcmp(argv[i], "--rom") == 0 && i + 1 < argc)
 			rom_path = argv[++i];
 		else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
-			frames = (unsigned)atoi(argv[++i]);
+			opt.frames = (unsigned)atoi(argv[++i]);
 		else if (strcmp(argv[i], "--check") == 0 && i + 1 < argc)
-			check_path = argv[++i];
+			opt.check_path = argv[++i];
 		else if (strcmp(argv[i], "--png") == 0 && i + 1 < argc)
-			png_path = argv[++i];
-		else {
+			opt.png_path = argv[++i];
+		else if (strcmp(argv[i], "--shade") == 0 && i + 1 < argc)
+			opt.shade_path = argv[++i];
+		else if (strcmp(argv[i], "--serial-file") == 0 && i + 1 < argc)
+			opt.serial_path = argv[++i];
+		else if (strcmp(argv[i], "--pattern-contract") == 0)
+			opt.pattern_contract = 1;
+		else if (strcmp(argv[i], "--stop-on-result") == 0)
+			opt.stop_on_result = 1;
+		else if (strcmp(argv[i], "--judge") == 0 && i + 1 < argc) {
+			const char *which = argv[++i];
+			if (strcmp(which, "mooneye") == 0)
+				opt.judge_mooneye = 1;
+			else if (strcmp(which, "blargg") == 0)
+				opt.judge_blargg = 1;
+			else {
+				fprintf(stderr, "unknown judge: %s\n", which);
+				return 1;
+			}
+		} else if (strcmp(argv[i], "--hold") == 0 && i + 1 < argc) {
+			if (opt.nholds >= HOLD_MAX ||
+			    parse_hold(argv[++i], &opt.holds[opt.nholds]) != 0) {
+				fprintf(stderr, "bad --hold START:END:MASK\n");
+				return 1;
+			}
+			opt.nholds++;
+		} else {
 			fprintf(stderr, "unknown arg: %s\n", argv[i]);
 			return 1;
 		}
 	}
 
-	if (rom_path == NULL || frames < 3) {
-		fprintf(stderr, "usage: gb-host --rom PATH --frames N [--check FILE] [--png PATH]\n");
+	if (rom_path == NULL || opt.frames < 1) {
+		fprintf(stderr,
+			"usage: gb-host --rom PATH --frames N [--check FILE] [--png PATH]\n"
+			"       [--shade PATH] [--serial-file PATH] [--pattern-contract]\n"
+			"       [--judge mooneye|blargg] [--stop-on-result]\n"
+			"       [--hold START:END:HEXMASK]\n");
+		return 1;
+	}
+	if (opt.pattern_contract && opt.frames < 3) {
+		fprintf(stderr, "--pattern-contract needs at least 3 frames\n");
 		return 1;
 	}
 
@@ -287,7 +533,7 @@ static int cmd_run(int argc, char **argv)
 		return 1;
 	}
 
-	int rc = run_rom(rom, rom_size, frames, png_path, check_path);
+	int rc = run_rom(rom, rom_size, &opt);
 	free(rom);
 	return rc;
 }

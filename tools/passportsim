@@ -10,7 +10,8 @@
 #     patches/0002-lvgl-96-object-flags.patch
 #
 # Image format, same as ai-passport-chess: idf.py merge-bin writes a flash
-# image from address 0 (build/merged.bin). The app ELF is build/ai-passport-gb.elf.
+# image from address 0. ESP-IDF 5.5 names it build/merged-binary.bin.
+# The app ELF is build/ai-passport-gb.elf.
 # passportsim corpus.toml lists both, with sha256 pins. Batch commands are
 # start / run / screenshot / serial read. This script does not commit either
 # binary or the passportsim sources.
@@ -28,6 +29,7 @@ TOOLS_SRC="${PASSPORTSIM_TOOLS_SRC:-${CACHE}/tools-src}"
 usage() {
 	echo "usage: tools/passportsim setup" >&2
 	echo "       tools/passportsim run <merged.bin> <app.elf> <outdir>" >&2
+	echo "       tools/passportsim once <merged.bin> <app.elf> <outdir> <commands.txt>" >&2
 	exit 2
 }
 
@@ -109,6 +111,54 @@ EOF
 	echo "passportsim: logs in $outdir/run1/session.log and $outdir/run2/session.log"
 }
 
+once_image() {
+	bin=$1
+	elf=$2
+	outdir=$3
+	commands=$4
+	binary="${PASSPORTSIM_BIN:-${CACHE}/src/target/release/passportsim}"
+	if [ ! -x "$binary" ]; then
+		echo "passportsim: binary missing ($binary); run: tools/passportsim setup" >&2
+		exit 1
+	fi
+	if [ ! -f "$bin" ] || [ ! -f "$elf" ] || [ ! -f "$commands" ]; then
+		echo "passportsim: merged image, ELF, or command file missing" >&2
+		exit 1
+	fi
+	mkdir -p "$outdir"
+	outdir=$(cd "$outdir" && pwd)
+	bin=$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")
+	elf=$(cd "$(dirname "$elf")" && pwd)/$(basename "$elf")
+	commands=$(cd "$(dirname "$commands")" && pwd)/$(basename "$commands")
+	bin_sha=$(sha256sum "$bin" | awk '{print $1}')
+	elf_sha=$(sha256sum "$elf" | awk '{print $1}')
+	name=once
+	home="$outdir/$name/home"
+	art="$outdir/$name/artifacts"
+	mkdir -p "$home/config" "$art"
+	cat > "$home/config/corpus.toml" <<EOF
+[gbrom]
+bin = "$bin"
+elf = "$elf"
+sha256 = { bin = "$bin_sha", elf = "$elf_sha" }
+EOF
+	cp "$commands" "$outdir/$name/commands.txt"
+	set +e
+	PASSPORTSIM_HOME="$home" \
+		PASSPORTSIM_BATCH="$outdir/$name/commands.txt" \
+		PASSPORTSIM_BATCH_ARTIFACTS="$art" \
+		PASSPORTSIM_BATCH_KEEP_GOING=1 \
+		"$binary" status > "$outdir/$name/session.log" 2>&1
+	rc=$?
+	set -e
+	echo "$rc" > "$outdir/$name/exit_code"
+	if [ "$rc" -ne 0 ] && [ "$rc" -ne 10 ]; then
+		echo "passportsim: once exited $rc (see $outdir/$name/session.log)" >&2
+		return "$rc"
+	fi
+	echo "passportsim: log in $outdir/$name/session.log"
+}
+
 if [ $# -lt 1 ]; then
 	usage
 fi
@@ -122,6 +172,10 @@ setup)
 run)
 	[ $# -eq 3 ] || usage
 	run_image "$1" "$2" "$3"
+	;;
+once)
+	[ $# -eq 4 ] || usage
+	once_image "$1" "$2" "$3" "$4"
 	;;
 *)
 	usage

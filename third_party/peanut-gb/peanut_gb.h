@@ -1869,6 +1869,13 @@ void __gb_step_cpu(struct gb_s *gb)
 	opcode = __gb_read(gb, gb->cpu_reg.pc.reg++);
 	inst_cycles = op_cycles[opcode];
 
+	/* Optional per-opcode hook. Undefined in the firmware build, so the
+	 * generated code there matches upstream. The host defines it to sample
+	 * registers at the Mooneye LD B,B breakpoint (opcode 0x40). */
+#ifdef PEANUT_GB_OPCODE_HOOK
+	PEANUT_GB_OPCODE_HOOK(gb, opcode);
+#endif
+
 	/* Execute opcode */
 	switch(opcode)
 	{

@@ -27,11 +27,13 @@ jobs:
       - name: Show emulator stdout
         run: |
           ./build/gb-host --rom roms/homebrew/pattern.gb --frames 3 \
+            --pattern-contract \
             --png build/pattern-frame3.png | tee build/host-run.log
 
       - name: Verify hash stable (second run)
         run: |
           ./build/gb-host --rom roms/homebrew/pattern.gb --frames 3 \
+            --pattern-contract \
             --check roms/homebrew/pattern.sha256
 
       - name: Upload frame PNG
