@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(ESP_PLATFORM)
+#include "esp_system.h"
+#endif
+
 #define ENABLE_SOUND 0
 #define ENABLE_LCD 1
 #define PEANUT_GB_12_COLOUR 1
@@ -62,8 +66,14 @@ static void gb_error_cb(struct gb_s *gb, const enum gb_error_e err,
 {
 	(void)gb;
 	(void)err;
+#if defined(ESP_PLATFORM)
+	printf("gb_error addr=0x%04x\n", (unsigned)addr);
+	fflush(stdout);
+	esp_restart();
+#else
 	fprintf(stderr, "gb_error addr=0x%04x\n", (unsigned)addr);
 	abort();
+#endif
 }
 
 static struct gb_core *core_from_gb(struct gb_s *gb)
@@ -111,19 +121,27 @@ gb_err_t gb_core_save_size(const uint8_t *rom, size_t rom_size, size_t *out)
 	if (rom == NULL || out == NULL || rom_size < 0x150)
 		return GB_ERR_BAD_ARG;
 
-	struct gb_s gb;
+	/* struct gb_s is larger than the ESP32-C3 app_main stack. */
+	struct gb_s *gb = calloc(1, sizeof(*gb));
+	if (gb == NULL)
+		return GB_ERR_NO_MEM;
 	gb_rom_ctx_t ctx = { .rom = rom, .rom_size = rom_size, .cart_ram = NULL,
 			     .cart_ram_size = 0 };
 
-	gb_err_t mapped = init_from_rom(&gb, &ctx);
-	if (mapped != GB_OK)
+	gb_err_t mapped = init_from_rom(gb, &ctx);
+	if (mapped != GB_OK) {
+		free(gb);
 		return mapped;
+	}
 
 	size_t ram_size = 0;
-	if (gb_get_save_size_s(&gb, &ram_size) != 0)
+	if (gb_get_save_size_s(gb, &ram_size) != 0) {
+		free(gb);
 		return GB_ERR_UNSUPPORTED;
+	}
 
 	*out = ram_size;
+	free(gb);
 	return GB_OK;
 }
 

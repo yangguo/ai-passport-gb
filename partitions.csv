@@ -1,0 +1,7 @@
+# Source: https://github.com/FoloToy/ai-passport partitions.csv
+# commit 33d3d1d93a1125b356b47b6d83a7a60121be801e
+# Do not change this table until design section 14 question 2 is rejected.
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x7f0000,
