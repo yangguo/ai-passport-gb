@@ -58,8 +58,8 @@ static void wait_completed(int target)
 	while (s_completed < target) {
 		if (xSemaphoreTake(s_done, pdMS_TO_TICKS(200)) != pdTRUE) {
 			log_timeout();
-			s_completed = target;
-			return;
+			/* Only a real completion releases the borrowed DMA buffer. */
+			continue;
 		}
 		s_completed++;
 	}
@@ -72,6 +72,8 @@ static void submit(int x, int y, int x_end, int y_end, const void *buf)
 	if (err != ESP_OK) {
 		printf("gb_video: draw_bitmap %s\n", esp_err_to_name(err));
 		fflush(stdout);
+		/* The caller has rotated rows; drain before either is reused. */
+		wait_completed(s_submitted);
 		return;
 	}
 	s_submitted++;
